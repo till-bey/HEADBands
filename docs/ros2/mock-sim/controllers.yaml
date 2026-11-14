@@ -4,6 +4,8 @@ controller_manager:
     update_rate: 100
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
+    dual_arm_forward_position_controller:
+      type: forward_command_controller/ForwardCommandController
     left_arm_joint_trajectory_position_controller:
       type: joint_trajectory_controller/JointTrajectoryController
     right_arm_joint_trajectory_position_controller:
@@ -11,6 +13,12 @@ controller_manager:
     # Sim only: the robot drives the head with head_forward_position_controller.
     head_joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
+
+dual_arm_forward_position_controller:
+  ros__parameters:
+    joints: [joint_la0, joint_la1, joint_la2, joint_la3, joint_la4, joint_la5, joint_la6, joint_la7,
+             joint_ra0, joint_ra1, joint_ra2, joint_ra3, joint_ra4, joint_ra5, joint_ra6, joint_ra7]
+    interface_name: position
 
 left_arm_joint_trajectory_position_controller:
   ros__parameters:

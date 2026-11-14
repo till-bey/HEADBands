@@ -17,8 +17,9 @@ from launch_ros.actions import Node
 HERE = os.path.dirname(os.path.realpath(__file__))
 ARM_HEAD = [f"joint_{s}a{i}" for s in "lr" for i in range(8)] + ["joint_head0", "joint_head1"]
 WHEELS = [f"joint_{w}_{k}" for w in ("fl", "fr", "bl", "br") for k in ("rev", "con")]
-# The vendor URDF gives every arm joint velocity="0"; rqt divides by it. 1 rad/s is a sim guess, not a robot spec.
-SIM_ARM_VEL = "1.0"
+# The vendor URDF gives every arm joint velocity="0"; rqt divides by it. 0.5 rad/s is our choice;
+# the vendor publishes no limit (PR #521 moves the arms at 0.35 rad/s average).
+SIM_ARM_VEL = "0.5"
 SIM_DOMAIN = "77"
 VENDOR_MESHES ="file:///opt/ros/humble/share/mh3_description"
 
@@ -85,8 +86,11 @@ def nodes(context):
         Node(package="robot_state_publisher", executable="robot_state_publisher", parameters=[desc]),
         Node(package="controller_manager", executable="ros2_control_node",
              parameters=[os.path.join(HERE, "controllers.yaml")], output="screen"),
-        spawn("joint_state_broadcaster", "left_arm_joint_trajectory_position_controller",
-              "right_arm_joint_trajectory_position_controller", "head_joint_trajectory_controller"),
+        # As on the robot: the forward controller owns both arms; the per-arm trajectory controllers
+        # are loaded inactive and switched in for a move (cartesian_follow.py, PR #521 driver).
+        spawn("joint_state_broadcaster", "dual_arm_forward_position_controller", "head_joint_trajectory_controller"),
+        spawn("--inactive", "left_arm_joint_trajectory_position_controller",
+              "right_arm_joint_trajectory_position_controller"),
         Node(package="rviz2", executable="rviz2", arguments=["-d", os.path.join(HERE, "panther.rviz")]),
         Node(package="rqt_joint_trajectory_controller", executable="rqt_joint_trajectory_controller"),
     ]

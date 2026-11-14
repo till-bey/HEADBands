@@ -11,6 +11,17 @@ Visualization Manager:
       Enabled: false
       Show Names: false
       Marker Scale: 0.3
+    # Published by ../cartesian/cartesian_follow.py; RViz keeps the last one after the script exits.
+    - Class: rviz_default_plugins/Path
+      Name: Planned hand path
+      Enabled: true
+      Topic:
+        Value: /cartesian_follow/planned_path
+        Durability Policy: Transient Local
+      Color: 0; 200; 255
+      Line Style: Billboards
+      Line Width: 0.005
+      Pose Style: None
     - Class: rviz_default_plugins/RobotModel
       Name: RobotModel
       Enabled: true

@@ -7,7 +7,16 @@ source /opt/ros/jazzy/setup.bash          # or humble
 ros2 launch docs/ros2/mock-sim/mock_sim.launch.py
 ```
 
-One command starts the sim, RViz and rqt. In rqt, open the **controller manager ns** dropdown and pick `/controller_manager`. Then open **controller** and pick one; it lists after about 5 s. Press the red power button so it turns green, and drag the sliders. The dropdowns start blank even when they have entries.
+One command starts the sim, RViz and rqt.
+
+As on the robot, `dual_arm_forward_position_controller` owns both arms at startup, and the arm trajectory controllers are loaded but inactive. rqt lists only active trajectory controllers, so switch one in first (in a terminal set up as below):
+
+```bash
+ros2 control switch_controllers --deactivate dual_arm_forward_position_controller \
+  --activate left_arm_joint_trajectory_position_controller
+```
+
+In rqt, open the **controller manager ns** dropdown and pick `/controller_manager`. Then open **controller** and pick one; it lists after about 5 s. Press the red power button so it turns green, and drag the sliders. The dropdowns start blank even when they have entries. [`../cartesian/cartesian_follow.py`](../cartesian/README.md) does this switch itself and switches back afterwards.
 
 RViz: left-drag rotates, middle-drag pans, scroll zooms (Interact tool).
 
@@ -37,8 +46,9 @@ Names as on the robot:
 
 | Controller | Joints |
 | --- | --- |
-| `left_arm_joint_trajectory_position_controller` | `joint_la0..7` |
-| `right_arm_joint_trajectory_position_controller` | `joint_ra0..7` |
+| `dual_arm_forward_position_controller` (active at start) | `joint_la0..7`, `joint_ra0..7` |
+| `left_arm_joint_trajectory_position_controller` (inactive at start) | `joint_la0..7` |
+| `right_arm_joint_trajectory_position_controller` (inactive at start) | `joint_ra0..7` |
 | `head_joint_trajectory_controller` (sim only; the robot uses `head_forward_position_controller`) | `joint_head0`, `joint_head1` |
 
 From the CLI, send all 8 arm joints. The controller rejects partial goals:
@@ -74,5 +84,5 @@ The launch file removes the vendor `<ros2_control>` and `<gazebo>` blocks, becau
 
 ## Gotchas
 
-- The vendor URDF has `velocity="0"` on every arm joint. rqt divides by it and crashes. The launch file sets the sim copy to 1.0 rad/s, which is a guess, not a robot spec. The robot's own `/robot_description` has the same zeros, so rqt pointed at the real robot will hit this too.
+- The vendor URDF has `velocity="0"` on every arm joint. rqt divides by it and crashes. The launch file sets the sim copy to 0.5 rad/s, our chosen limit, not a vendor spec. The robot's own `/robot_description` has the same zeros, so rqt pointed at the real robot will hit this too.
 - From a VS Code **snap** terminal, RViz and rqt crash (`libpthread ... GLIBC_PRIVATE`, `GLib-GIO-ERROR`). Run them from a normal terminal.
