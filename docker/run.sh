@@ -50,7 +50,9 @@ exec docker run --rm \
   -e ROS_DOMAIN_ID=15 \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
+  -e DISPLAY="${DISPLAY:-:0}" \
   -v "${ROOT}:/workspace" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -w /workspace \
   "${IMAGE}" \
   "$@"
