@@ -1,4 +1,4 @@
-FROM ros:humble-ros-base
+FROM osrf/ros:humble-desktop
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rmw-cyclonedds-cpp \
@@ -21,7 +21,8 @@ RUN . /opt/ros/humble/setup.sh \
     && rm -rf /tmp/unix_ws
 
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+    && printf '\n[ -f /workspace/docker/shell.sh ] && . /workspace/docker/shell.sh\n' >> /root/.bashrc
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]

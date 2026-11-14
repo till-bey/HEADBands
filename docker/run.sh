@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="headbands-ros:jazzy"
+IMAGE="headbands-ros:humble"
 ROBOT_IP="192.168.100.3"
 
 if [[ "${1:-}" == "--build" ]]; then
