@@ -1,4 +1,4 @@
-"""Panther arms + head on ros2_control mock hardware, shown in RViz, driven from rqt. No physics.
+"""Panther arms, head, lift and grippers on ros2_control mock hardware, shown in RViz, driven from rqt. No physics.
 Always runs on ROS_DOMAIN_ID 77, localhost only, whatever the terminal is set to.
 
 ros2 launch docs/ros2/mock-sim/mock_sim.launch.py
@@ -7,15 +7,20 @@ ros2 launch docs/ros2/mock-sim/mock_sim.launch.py
 """
 import math
 import os
+import sys
 import xml.etree.ElementTree as ET
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 ARM_HEAD = [f"joint_{s}a{i}" for s in "lr" for i in range(8)] + ["joint_head0", "joint_head1"]
+# Lift (base z axis) and grippers: the vendor URDF has them fixed; robot_description() frees them.
+LIFT_GRIPPERS = ["body_joint", "joint_lf", "joint_rf"]
+LIFT_VEL = "0.05"   # m/s, the SDK lift limit
+FINGER_CLOSE = 0.7  # rad of stand-in finger swing at gripper 1.0 (closed); looks right, not a vendor value
 WHEELS = [f"joint_{w}_{k}" for w in ("fl", "fr", "bl", "br") for k in ("rev", "con")]
 # The vendor URDF gives every arm joint velocity="0"; rqt divides by it. 0.5 rad/s is our choice;
 # the vendor publishes no limit (PR #521 moves the arms at 0.35 rad/s average).
@@ -61,13 +66,32 @@ def robot_description(urdf_path, mesh_dir):
         lim = j.find("limit")
         if j.get("name") in ARM_HEAD and lim is not None and float(lim.get("velocity", "0")) == 0:
             lim.set("velocity", SIM_ARM_VEL)
+    by_name = {j.get("name"): j for j in root.findall("joint")}
+    if by_name["body_joint"].get("type") == "fixed":
+        by_name["body_joint"].set("type", "prismatic")  # vendor axis and 0-0.6 m limit kept
+        by_name["body_joint"].find("limit").set("velocity", LIFT_VEL)
+    for s in "lr":
+        if by_name[f"joint_{s}f"].get("type") != "fixed":
+            continue
+        # ros2_control rejects fixed joints, but cartesian_follow.py's IK runs through joint_{s}f to link_{s}f.
+        # So the vendor joint stays fixed under a new name, and joint_{s}f becomes a 0 (open)..1 (closed)
+        # joint on a dummy link that moves nothing itself; the two finger roots mimic it.
+        by_name[f"joint_{s}f"].set("name", f"joint_{s}f_mount")
+        root.append(ET.fromstring(f'<link name="link_{s}f_cmd"/>'))
+        root.append(ET.fromstring(
+            f'<joint name="joint_{s}f" type="revolute"><parent link="link_{s}f"/><child link="link_{s}f_cmd"/>'
+            '<origin xyz="0 0 0"/><axis xyz="0 0 1"/><limit effort="0" lower="0" upper="1" velocity="1"/></joint>'))
+        for finger in (f"joint_{s}f00", f"joint_{s}f10"):
+            by_name[finger].set("type", "revolute")
+            by_name[finger].find("limit").set("upper", str(FINGER_CLOSE))
+            ET.SubElement(by_name[finger], "mimic", joint=f"joint_{s}f", multiplier=str(FINGER_CLOSE))
     if not any(l.find("visual") is not None for l in root.findall("link")):
         add_primitive_visuals(root)
 
     joints = "".join(
         f'<joint name="{j}"><command_interface name="position"/>'
         '<state_interface name="position"><param name="initial_value">0.0</param></state_interface>'
-        '<state_interface name="velocity"/></joint>' for j in ARM_HEAD)
+        '<state_interface name="velocity"/></joint>' for j in ARM_HEAD + LIFT_GRIPPERS)
     # Wheels are state-only so robot_state_publisher gets a TF for them.
     joints += "".join(f'<joint name="{j}"><state_interface name="position"/></joint>' for j in WHEELS)
     root.append(ET.fromstring('<ros2_control name="panther_mock" type="system"><hardware>'
@@ -88,9 +112,13 @@ def nodes(context):
              parameters=[os.path.join(HERE, "controllers.yaml")], output="screen"),
         # As on the robot: the forward controller owns both arms; the per-arm trajectory controllers
         # are loaded inactive and switched in for a move (cartesian_follow.py, PR #521 driver).
-        spawn("joint_state_broadcaster", "dual_arm_forward_position_controller", "head_joint_trajectory_controller"),
+        spawn("joint_state_broadcaster", "dual_arm_forward_position_controller", "head_forward_position_controller",
+              "lifting_joint_trajectory_controller", "left_gripper_joint_trajectory_controller",
+              "right_gripper_joint_trajectory_controller"),
         spawn("--inactive", "left_arm_joint_trajectory_position_controller",
-              "right_arm_joint_trajectory_position_controller"),
+              "right_arm_joint_trajectory_position_controller", "head_joint_trajectory_controller"),
+        # The robot's lift and gripper topics (its controllers for them are vendor plugins).
+        ExecuteProcess(cmd=[sys.executable, os.path.join(HERE, "robot_topics.py")], output="screen"),
         Node(package="rviz2", executable="rviz2", arguments=["-d", os.path.join(HERE, "panther.rviz")]),
         Node(package="rqt_joint_trajectory_controller", executable="rqt_joint_trajectory_controller"),
     ]

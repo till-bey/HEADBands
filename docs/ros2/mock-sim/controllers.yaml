@@ -10,8 +10,18 @@ controller_manager:
       type: joint_trajectory_controller/JointTrajectoryController
     right_arm_joint_trajectory_position_controller:
       type: joint_trajectory_controller/JointTrajectoryController
-    # Sim only: the robot drives the head with head_forward_position_controller.
+    head_forward_position_controller:
+      type: forward_command_controller/ForwardCommandController
+    # Sim only, for rqt: switch it in for head_forward_position_controller, as for the arms.
     head_joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    # Sim only: robot_topics.py serves the robot's lifting_controller and gripper topics through these
+    # (the robot's controllers are vendor plugins, not available here).
+    lifting_joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    left_gripper_joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    right_gripper_joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 dual_arm_forward_position_controller:
@@ -32,8 +42,31 @@ right_arm_joint_trajectory_position_controller:
     command_interfaces: [position]
     state_interfaces: [position, velocity]
 
+head_forward_position_controller:
+  ros__parameters:
+    joints: [joint_head0, joint_head1]
+    interface_name: position
+
 head_joint_trajectory_controller:
   ros__parameters:
     joints: [joint_head0, joint_head1]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+
+lifting_joint_trajectory_controller:
+  ros__parameters:
+    joints: [body_joint]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+
+left_gripper_joint_trajectory_controller:
+  ros__parameters:
+    joints: [joint_lf]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+
+right_gripper_joint_trajectory_controller:
+  ros__parameters:
+    joints: [joint_rf]
     command_interfaces: [position]
     state_interfaces: [position, velocity]

@@ -7,6 +7,7 @@ dual_arm_forward_position_controller off for the move, back on afterwards.
 
   python3 cartesian_follow.py --arm left --path example_path.csv            # move
   python3 cartesian_follow.py --arm left --path example_path.csv --dry-run  # plan + check only
+  python3 cartesian_follow.py --arm right --joints FILE.csv --dry-run       # joint angles given: no IK, same checks
 
 CSV rows: t,x,y,z,roll,pitch,yaw (s, m, rad), the gripper frame (link_lf / link_rf) in body_link.
 body_link is used because the lift moves it on the robot while the URDF has the lift fixed.
@@ -123,8 +124,10 @@ def plan(chain, poses, ts, q_now, max_vel, hint=None):
 
 def timed(chain, qs, ts, q_now, max_vel):
     """Add the move from q_now and the spline velocities; raise if any joint would exceed max_vel."""
-    # Get to the first waypoint first; a cubic with zero end speeds peaks at 1.5x its mean speed.
-    approach = max(1.0, 1.5 * np.abs(qs[0] - q_now).max() / max_vel)
+    # Get to the first waypoint first, at 90% of the limit (headroom for tracking error and timestamp jitter) and
+    # never faster than MAX_JOINT_VEL even when the path itself may be; a cubic with zero end speeds peaks at 1.5x
+    # its mean speed.
+    approach = max(1.0, 1.5 * np.abs(qs[0] - q_now).max() / (0.9 * min(max_vel, MAX_JOINT_VEL)))
     qs = np.array([q_now] + qs)
     ts = np.r_[0.0, np.asarray(ts) - ts[0] + approach]
     # Monotone (Fritsch-Butland) velocities: zero where a joint turns, so the controller's cubic
@@ -133,17 +136,21 @@ def timed(chain, qs, ts, q_now, max_vel):
     same = d[:-1] * d[1:] > 0
     vels = np.zeros_like(qs)
     vels[1:-1] = np.where(same, 2 * d[:-1] * d[1:] / (d[:-1] + d[1:] + ~same), 0.0)
-    # Peak speed of the cubic Hermite segments the trajectory controller will actually run.
-    s = np.linspace(0.0, 1.0, 21)[:, None, None]
-    h = np.diff(ts)[None, :, None]
-    v = (6 * s**2 - 6 * s) * (qs[:-1] - qs[1:]) / h + (3 * s**2 - 4 * s + 1) * vels[:-1] + (3 * s**2 - 2 * s) * vels[1:]
-    peak = np.abs(v).max(axis=0)  # segments x joints
+    peak = spline_peak(qs, ts, vels)
     if peak.max() > max_vel * (1 + 1e-6):
         i, k = np.unravel_index(int(peak.argmax()), peak.shape)
         raise RuntimeError(f"{chain.names[k]} would reach {peak[i, k]:.2f} rad/s between t={ts[i]:.3f}s and "
                            f"t={ts[i+1]:.3f}s of the move (limit {max_vel} rad/s); slow the trajectory down")
     # Drop the current-state point: the controller starts from where the arm is.
     return qs[1:], ts[1:], vels[1:]
+
+
+def spline_peak(qs, ts, vels):
+    """Peak |speed| (segments x joints) of the cubic Hermite segments the trajectory controller runs."""
+    s = np.linspace(0.0, 1.0, 21)[:, None, None]
+    h = np.diff(ts)[None, :, None]
+    v = (6 * s**2 - 6 * s) * (qs[:-1] - qs[1:]) / h + (3 * s**2 - 4 * s + 1) * vels[:-1] + (3 * s**2 - 2 * s) * vels[1:]
+    return np.abs(v).max(axis=0)
 
 
 def path_msg(chain, qs, stamp):
@@ -172,14 +179,34 @@ def load_csv(path):
         (hint[0] if hint else None)
 
 
+def load_joints(path, chain):
+    """Rows t,q... in chain.names order (no IK). Raises RuntimeError if a joint is outside its limits."""
+    try:
+        rows = np.loadtxt(path, delimiter=",", ndmin=2, comments="#")
+    except ValueError as e:
+        raise SystemExit(f"{path}: not a t,{','.join(chain.names)} file (header lines must start with #): {e}")
+    if rows.shape[1] != 1 + len(chain.names) or np.any(np.diff(rows[:, 0]) <= 0):
+        raise SystemExit(f"{path}: need columns t,{','.join(chain.names)} with t strictly increasing")
+    qs, ts = rows[:, 1:], rows[:, 0]
+    out = (qs < chain.lo) | (qs > chain.hi)
+    if out.any():
+        i, k = np.argwhere(out)[0]
+        raise RuntimeError(f"{chain.names[k]} = {qs[i, k]:.3f} at t={ts[i]:.2f}s is outside its limits "
+                           f"{chain.lo[k]:.3f}..{chain.hi[k]:.3f}")
+    return list(qs), ts
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--arm", choices=("left", "right"), required=True)
-    ap.add_argument("--path", required=True)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--path", help="hand poses t,x,y,z,roll,pitch,yaw (IK solved here)")
+    src.add_argument("--joints", help="arm joint angles t,q0..q7 in the controller's joint order (no IK)")
     ap.add_argument("--max-joint-vel", type=float, default=MAX_JOINT_VEL)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    poses, ts, hint = load_csv(args.path)
+    if args.path:
+        poses, ts, hint = load_csv(args.path)
 
     rclpy.init()
     node = rclpy.create_node("cartesian_follow")
@@ -203,7 +230,10 @@ def main():
     chain = Chain(got["urdf"], BASE, f"link_{args.arm[0]}f")
     q_now = np.array([got["js"][n] for n in chain.names])
     try:
-        qs, ts, vels = plan(chain, poses, ts, q_now, args.max_joint_vel, hint)
+        if args.joints:
+            qs, ts, vels = timed(chain, *load_joints(args.joints, chain), q_now, args.max_joint_vel)
+        else:
+            qs, ts, vels = plan(chain, poses, ts, q_now, args.max_joint_vel, hint)
     except RuntimeError as e:
         sys.exit(f"refused, nothing sent: {e}")
     print(f"planned {len(qs)} points over {ts[-1]:.1f}s (incl. {ts[0]:.1f}s to reach the start), "
