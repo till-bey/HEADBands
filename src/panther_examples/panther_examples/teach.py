@@ -1,16 +1,15 @@
-"""Record a loose-arm motion, then turn it into a trajectory.
+"""Record a right-arm motion by hand, then play it back.
 
-Run one step at a time. With no arguments this only prints status.
+Run one step at a time inside the Docker container:
 
-  python3 src/panther_examples/panther_examples/teach.py
-  python3 src/panther_examples/panther_examples/teach.py release
-  python3 src/panther_examples/panther_examples/teach.py one-joint
-  python3 src/panther_examples/panther_examples/teach.py disable --yes
-  python3 src/panther_examples/panther_examples/teach.py record --seconds 10
-  python3 src/panther_examples/panther_examples/teach.py action
-  python3 src/panther_examples/panther_examples/teach.py play --yes
+  ros2 run panther_examples teach               # print status
+  ros2 run panther_examples teach release        # deactivate the forward controller
+  ros2 run panther_examples teach disable --yes  # drop torque on right arm joints
+  ros2 run panther_examples teach record --seconds 10
+  ros2 run panther_examples teach action         # convert recording -> trajectory
+  ros2 run panther_examples teach play --yes     # play back via the trajectory controller
 
-disable drops torque on every arm joint. play moves the arms.
+disable drops torque on right arm joints. play moves the right arm.
 Neither runs unless you pass --yes.
 """
 
@@ -28,26 +27,23 @@ from control_msgs.action import FollowJointTrajectory
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-LEFT = [
-    "joint_la0", "joint_la1", "joint_la2", "joint_la3",
-    "joint_la4", "joint_la5", "joint_la6", "joint_la7",
-]
-RIGHT = [
+RIGHT_ARM = [
     "joint_ra0", "joint_ra1", "joint_ra2", "joint_ra3",
     "joint_ra4", "joint_ra5", "joint_ra6", "joint_ra7",
 ]
-ARMS = LEFT + RIGHT
 FORWARD = "dual_arm_forward_position_controller"
-LEFT_TRAJ = "left_arm_joint_trajectory_position_controller"
 RIGHT_TRAJ = "right_arm_joint_trajectory_position_controller"
-LEFT_HARDWARE = "unix_openarm_left"
 RIGHT_HARDWARE = "unix_openarm_right"
 # The CANopen driver waits this long for the status word, then answers.
-DRIVE_SWITCH_SEC = 5.0
 SERVICE_TIMEOUT_SEC = 20.0
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def out_dir():
+    """Resolve the output directory for recordings, next to the workspace root."""
     here = Path(__file__).resolve()
     for parent in here.parents:
         if (parent / "src" / "panther_examples").is_dir():
@@ -60,15 +56,12 @@ def out_dir():
 
 
 def service_name(joint, verb):
-    bus = "can0" if joint.startswith("joint_la") else "can1"
-    return f"/{bus}/{joint}/{verb}"
-
-
-def hardware_for(joint):
-    return LEFT_HARDWARE if joint.startswith("joint_la") else RIGHT_HARDWARE
+    """Build the CANopen service name for a right-arm joint."""
+    return f"/can1/{joint}/{verb}"
 
 
 def hardware_state(name):
+    """Parse the state label for a hardware component."""
     proc = subprocess.run(
         ["ros2", "control", "list_hardware_components"],
         check=False, text=True, capture_output=True)
@@ -84,15 +77,16 @@ def hardware_state(name):
 
 
 def call_trigger(service):
-    """Call a Trigger service and wait past the drive's own 5s state switch."""
+    """Call a std_srvs/srv/Trigger service and return True on success."""
     print(
         f"CALL     {service}  "
-        f"(drive waits {DRIVE_SWITCH_SEC:.0f}s, this waits {SERVICE_TIMEOUT_SEC:.0f}s)"
+        f"(timeout {SERVICE_TIMEOUT_SEC:.0f}s)"
     )
     try:
         proc = subprocess.run(
             ["ros2", "service", "call", service, "std_srvs/srv/Trigger", "{}"],
-            check=False, text=True, capture_output=True, timeout=SERVICE_TIMEOUT_SEC)
+            check=False, text=True, capture_output=True,
+            timeout=SERVICE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
         print(f"TIMEOUT  {service}")
         return None
@@ -108,7 +102,7 @@ def call_trigger(service):
 
 
 def parse_controller_states(text):
-    """Humble prints `name  type  state`. Older builds print `name[type] state`."""
+    """Parse controller names and their lifecycle states."""
     states = {}
     known = {"active", "inactive", "unconfigured", "finalized"}
     plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
@@ -128,64 +122,41 @@ def controller_states():
     return proc.returncode, proc.stdout, proc.stderr, parse_controller_states(text)
 
 
-class Teach(Node):
-    def __init__(self):
-        super().__init__("panther_teach")
-
-    def record_samples(self, seconds):
-        latest = {}
-
-        def on_state(msg):
-            latest["msg"] = msg
-
-        self.create_subscription(JointState, "/joint_states", on_state, 10)
-        samples = []
-        start = time.monotonic()
-        next_save = start
-        missing = set(ARMS)
-        while rclpy.ok() and time.monotonic() < start + seconds:
-            rclpy.spin_once(self, timeout_sec=0.05)
-            msg = latest.get("msg")
-            if msg is None or time.monotonic() < next_save:
-                continue
-            found = {
-                name: position
-                for name, position in zip(msg.name, msg.position)
-                if name in ARMS
-            }
-            missing -= set(found)
-            if len(found) != len(ARMS):
-                continue
-            samples.append({
-                "t": round(time.monotonic() - start, 3),
-                "position": [found[name] for name in ARMS],
-            })
-            next_save = time.monotonic() + 0.05
-        return samples, sorted(missing)
-
+# ---------------------------------------------------------------------------
+# Steps
+# ---------------------------------------------------------------------------
 
 def step_status():
-    print("1. CAN enable/disable services")
-    for joint in (LEFT[0], RIGHT[0]):
+    """Print current controller and hardware state for the right arm."""
+    print("=== Right-arm teach status ===\n")
+
+    print("1. CAN enable/disable services (right arm)")
+    for joint in (RIGHT_ARM[0], RIGHT_ARM[-1]):
         for verb in ("disable", "enable"):
             print(f"   {service_name(joint, verb)}")
-    print("   (one-joint calls these. This step does not.)")
     print()
-    print("2. Arm controllers")
+
+    print("2. Controllers")
     code, stdout, stderr, states = controller_states()
     if code != 0:
         print(stderr.strip() or "ros2 control list_controllers failed")
         return 1
-    for name in (FORWARD, LEFT_TRAJ, RIGHT_TRAJ):
+    for name in (FORWARD, RIGHT_TRAJ):
         print(f"   {name}: {states.get(name, 'not listed')}")
     if states.get(FORWARD) == "active":
-        print("   The forward controller is holding the arms. Run release first.")
-    for name in (LEFT_HARDWARE, RIGHT_HARDWARE):
-        print(f"   {name}: {hardware_state(name)}")
-    print("   Leave the arm hardware active. Turning it off quick-stops every joint,")
-    print("   and disable cannot run after that quick stop.")
+        print("   >>> The forward controller is holding the arms. Run 'release' first.")
     print()
-    print("Next: release, then one-joint on joint_la7.")
+
+    print("3. Hardware")
+    print(f"   {RIGHT_HARDWARE}: {hardware_state(RIGHT_HARDWARE)}")
+    print()
+
+    print("Pipeline:")
+    print("  1) release       – deactivate forward controller")
+    print("  2) disable --yes – drop torque on right arm (hold the arm!)")
+    print("  3) record        – subscribe to /joint_states for N seconds")
+    print("  4) action        – convert recording to a trajectory file")
+    print("  5) play --yes    – play back via FollowJointTrajectory action")
     if stdout.strip():
         print()
         print(stdout.rstrip())
@@ -193,6 +164,7 @@ def step_status():
 
 
 def step_release():
+    """Deactivate the dual-arm forward position controller so it stops holding."""
     code, _stdout, stderr, states = controller_states()
     if code != 0:
         print(stderr.strip() or "ros2 control list_controllers failed")
@@ -212,67 +184,65 @@ def step_release():
     return 0
 
 
-def _require_active(hardware):
-    state = hardware_state(hardware)
-    print(f"{hardware}: {state}")
-    if state == "active":
-        return True
-    print(f"disable was not called. {hardware} is {state}.")
-    print("Turning that component off quick-stops every joint on the arm.")
-    print("From quick stop, disable has no legal transition and returns success=False.")
-    print("Turning it back on runs init and homing on all 8 joints. Stay clear of the arm, then:")
-    print(f"  ros2 control set_hardware_component_state {hardware} active")
-    return False
-
-
-def step_one_joint(joint):
-    if joint not in ARMS:
-        print(f"{joint} is not an arm joint")
-        return 1
-    hardware = hardware_for(joint)
-    print(f"Hold {joint}. Disabling drops its torque.")
-    if not _require_active(hardware):
-        return 1
-    disabled = call_trigger(service_name(joint, "disable"))
-    if not disabled:
-        print("Enable was not called.")
-        print("The drive refused the transition. It may already be in quick stop.")
-        return 1
-    time.sleep(2.0)
-    enabled = call_trigger(service_name(joint, "enable"))
-    if not enabled:
-        print(f"{joint} is still disabled.")
-        return 1
-    print(f"{joint} accepted disable and enable.")
-    return 0
-
-
 def step_disable():
-    print("Disabling every arm joint. Both arms will drop. Hold them.")
-    if not _require_active(LEFT_HARDWARE) or not _require_active(RIGHT_HARDWARE):
+    """Disable (drop torque on) every right-arm joint via the CANopen services."""
+    print("Disabling right arm joints. The arm will drop – hold it!")
+    hw = hardware_state(RIGHT_HARDWARE)
+    print(f"{RIGHT_HARDWARE}: {hw}")
+    if hw != "active":
+        print(f"Hardware is not active ({hw}). Cannot disable joints.")
         return 1
+
     failed = []
-    for joint in ARMS:
+    for joint in RIGHT_ARM:
         if not call_trigger(service_name(joint, "disable")):
             failed.append(joint)
     if failed:
         print("Still enabled or unanswered: " + " ".join(failed))
         return 1
-    print("All 16 arm joints accepted disable. Move them by hand, then record.")
+    print("All 8 right-arm joints accepted disable. Move the arm by hand, then record.")
     return 0
 
 
 def step_record(node, seconds):
-    print(f"Recording /joint_states for {seconds:.0f} s. Move the arms now.")
-    samples, missing = node.record_samples(seconds)
-    if missing:
-        print("No samples for: " + " ".join(missing))
+    """Subscribe to /joint_states and save right-arm positions to a JSON file."""
+    print(f"Recording /joint_states for {seconds:.0f}s. Move the right arm now.")
+    right_set = set(RIGHT_ARM)
+    latest = {}
+
+    def on_state(msg):
+        latest["msg"] = msg
+
+    node.create_subscription(JointState, "/joint_states", on_state, 10)
+    samples = []
+    start = time.monotonic()
+    next_save = start
+
+    while rclpy.ok() and time.monotonic() < start + seconds:
+        rclpy.spin_once(node, timeout_sec=0.05)
+        msg = latest.get("msg")
+        if msg is None or time.monotonic() < next_save:
+            continue
+        found = {
+            name: position
+            for name, position in zip(msg.name, msg.position)
+            if name in right_set
+        }
+        if len(found) != len(RIGHT_ARM):
+            continue
+        samples.append({
+            "t": round(time.monotonic() - start, 3),
+            "position": [found[name] for name in RIGHT_ARM],
+        })
+        next_save = time.monotonic() + 0.05  # ~20 Hz
+
     if not samples:
         print("Recorded nothing.")
         return 1
-    path = out_dir() / "recording.json"
+
+    path = out_dir() / "recording_right.json"
     path.write_text(json.dumps({
-        "joints": ARMS,
+        "joints": RIGHT_ARM,
         "samples": samples,
     }, indent=2) + "\n")
     print(f"Wrote {len(samples)} samples to {path}")
@@ -280,6 +250,7 @@ def step_record(node, seconds):
 
 
 def _downsample(samples):
+    """Keep one sample every ~100 ms, always including first and last."""
     kept = []
     next_t = 0.0
     for sample in samples:
@@ -292,19 +263,9 @@ def _downsample(samples):
     return kept
 
 
-def _side(points, start, end):
-    trajectory = []
-    for sample in points:
-        # Half a second before the recorded start, so playback is not a step.
-        trajectory.append({
-            "time_from_start": round(0.5 + sample["t"], 3),
-            "positions": sample["position"][start:end],
-        })
-    return trajectory
-
-
 def step_action():
-    path = out_dir() / "recording.json"
+    """Convert the raw recording into a FollowJointTrajectory-ready JSON."""
+    path = out_dir() / "recording_right.json"
     if not path.is_file():
         print(f"No recording at {path}. Run record first.")
         return 1
@@ -314,32 +275,40 @@ def step_action():
         print("Recording has no samples.")
         return 1
     points = _downsample(samples)
+    trajectory_points = []
+    for sample in points:
+        trajectory_points.append({
+            # Add 0.5 s offset so the first point is not a hard step
+            "time_from_start": round(0.5 + sample["t"], 3),
+            "positions": sample["position"],
+        })
     action = {
         "note": (
-            "Start playback from the pose in the first sample. "
-            "The first point is 0.5 s out so the arms are not stepped."
+            "Right-arm trajectory. The first point is 0.5 s out so playback "
+            "is not a step from the current pose."
         ),
-        "left": {"joint_names": LEFT, "points": _side(points, 0, 8)},
-        "right": {"joint_names": RIGHT, "points": _side(points, 8, 16)},
+        "joint_names": RIGHT_ARM,
+        "points": trajectory_points,
     }
-    dest = out_dir() / "action.json"
+    dest = out_dir() / "action_right.json"
     dest.write_text(json.dumps(action, indent=2) + "\n")
-    duration = action["left"]["points"][-1]["time_from_start"]
-    print(f"Wrote {len(points)} points, {duration:.1f} s, to {dest}")
-    print("First left positions: " + " ".join(
-        f"{value:.3f}" for value in action["left"]["points"][0]["positions"]))
-    print("Last left positions:  " + " ".join(
-        f"{value:.3f}" for value in action["left"]["points"][-1]["positions"]))
-    print("Inspect that file. play --yes sends it.")
+    duration = action["points"][-1]["time_from_start"]
+    print(f"Wrote {len(trajectory_points)} points, {duration:.1f} s, to {dest}")
+    print("First positions: " + " ".join(
+        f"{v:.3f}" for v in action["points"][0]["positions"]))
+    print("Last positions:  " + " ".join(
+        f"{v:.3f}" for v in action["points"][-1]["positions"]))
+    print("Inspect the file, then: play --yes")
     return 0
 
 
-def _goal_from_side(side):
+def _goal_from_action(action):
+    """Build a FollowJointTrajectory.Goal from the action JSON."""
     goal = FollowJointTrajectory.Goal()
-    goal.trajectory.joint_names = list(side["joint_names"])
-    for point in side["points"]:
+    goal.trajectory.joint_names = list(action["joint_names"])
+    for point in action["points"]:
         msg = JointTrajectoryPoint()
-        msg.positions = [float(value) for value in point["positions"]]
+        msg.positions = [float(v) for v in point["positions"]]
         seconds = float(point["time_from_start"])
         msg.time_from_start.sec = int(seconds)
         msg.time_from_start.nanosec = int(round((seconds % 1) * 1e9))
@@ -350,86 +319,102 @@ def _goal_from_side(side):
     return goal
 
 
-def _submit(node, client, goal, label):
-    if not client.wait_for_server(timeout_sec=5.0):
-        print(f"No action server for {label}")
-        return None
-    future = client.send_goal_async(goal)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
-    handle = future.result() if future.done() else None
-    if handle is None or not handle.accepted:
-        print(f"Rejected {label}")
-        return None
-    print(f"Accepted {label}")
-    return handle.get_result_async()
-
-
 def step_play(node):
-    path = out_dir() / "action.json"
+    """Activate the right-arm trajectory controller and execute the recording."""
+    path = out_dir() / "action_right.json"
     if not path.is_file():
         print(f"No action at {path}. Run action first.")
         return 1
     action = json.loads(path.read_text())
-    print(f"Switching off {FORWARD} and on the two trajectory controllers.")
+
+    # Re-enable joints first (they were disabled for recording)
+    print("Re-enabling right arm joints...")
+    for joint in RIGHT_ARM:
+        call_trigger(service_name(joint, "enable"))
+
+    # Switch controllers: deactivate forward, activate right trajectory
+    print(f"Switching off {FORWARD}, on {RIGHT_TRAJ}.")
     proc = subprocess.run([
         "ros2", "control", "switch_controllers",
         "--deactivate", FORWARD,
-        "--activate", LEFT_TRAJ, RIGHT_TRAJ,
+        "--activate", RIGHT_TRAJ,
     ], check=False)
     if proc.returncode != 0:
-        print("Controllers were not switched. Nothing was sent.")
+        print("Controller switch failed. Nothing was sent.")
         return proc.returncode
-    left = ActionClient(
-        node, FollowJointTrajectory, f"/{LEFT_TRAJ}/follow_joint_trajectory")
-    right = ActionClient(
-        node, FollowJointTrajectory, f"/{RIGHT_TRAJ}/follow_joint_trajectory")
-    pending = (
-        ("left arm", _submit(node, left, _goal_from_side(action["left"]), "left arm")),
-        ("right arm", _submit(node, right, _goal_from_side(action["right"]), "right arm")),
-    )
-    if any(future is None for _label, future in pending):
+
+    # Send the trajectory via the FollowJointTrajectory action
+    client = ActionClient(
+        node, FollowJointTrajectory,
+        f"/{RIGHT_TRAJ}/follow_joint_trajectory")
+    if not client.wait_for_server(timeout_sec=5.0):
+        print(f"No action server for {RIGHT_TRAJ}")
         return 1
-    for label, future in pending:
-        rclpy.spin_until_future_complete(node, future)
-        result = future.result()
-        print(f"Finished {label} status={result.status}")
+
+    goal = _goal_from_action(action)
+    duration = action["points"][-1]["time_from_start"]
+    print(f"Sending {len(action['points'])} points, {duration:.1f} s...")
+
+    future = client.send_goal_async(goal)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+    handle = future.result() if future.done() else None
+    if handle is None or not handle.accepted:
+        print("Goal rejected!")
+        return 1
+
+    print("Goal accepted. Playing back...")
+    result_future = handle.get_result_async()
+    rclpy.spin_until_future_complete(node, result_future)
+    result = result_future.result()
+    print(f"Finished. Status={result.status}")
+
+    # Switch back to the forward controller
+    print(f"Switching back to {FORWARD}.")
+    subprocess.run([
+        "ros2", "control", "switch_controllers",
+        "--activate", FORWARD,
+        "--deactivate", RIGHT_TRAJ,
+    ], check=False)
+
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "step",
         nargs="?",
         default="status",
-        choices=("status", "release", "one-joint", "disable", "record", "action", "play"),
+        choices=("status", "release", "disable", "record", "action", "play"),
     )
-    parser.add_argument("--joint", default="joint_la7")
-    parser.add_argument("--seconds", type=float, default=10.0)
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="required for disable and play",
-    )
+    parser.add_argument("--seconds", type=float, default=10.0,
+                        help="recording duration (default 10 s)")
+    parser.add_argument("--yes", action="store_true",
+                        help="required for disable and play (safety gate)")
     args = parser.parse_args()
 
     if args.step in ("disable", "play") and not args.yes:
-        print(f"{args.step} does nothing without --yes")
+        print(f"'{args.step}' does nothing without --yes (safety gate)")
         return 1
 
-    if args.step == "one-joint":
-        return step_one_joint(args.joint)
+    # Steps that don't need a ROS node
+    if args.step == "status":
+        return step_status()
+    if args.step == "release":
+        return step_release()
     if args.step == "disable":
         return step_disable()
-    if args.step in ("status", "release", "action"):
-        return {
-            "status": step_status,
-            "release": step_release,
-            "action": step_action,
-        }[args.step]()
+    if args.step == "action":
+        return step_action()
 
+    # Steps that need rclpy
     rclpy.init()
-    node = Teach()
+    node = Node("panther_teach_right")
     try:
         if args.step == "record":
             return step_record(node, args.seconds)
