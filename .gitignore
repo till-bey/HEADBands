@@ -1,2 +1,7 @@
 # Sandbox passwords. Keep the mail export on disk, out of git.
 docs/Gmail*
+
+# colcon workspace output
+build/
+install/
+log/
