@@ -5,3 +5,6 @@ docs/Gmail*
 build/
 install/
 log/
+data/
+curated/
+
