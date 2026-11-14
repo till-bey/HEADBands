@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "commands = panther_examples.commands:main",
+            "teach = panther_examples.teach:main",
         ],
     },
 )

@@ -23,6 +23,14 @@ RIGHT_ARM = [
     "joint_ra0", "joint_ra1", "joint_ra2", "joint_ra3",
     "joint_ra4", "joint_ra5", "joint_ra6", "joint_ra7",
 ]
+# /joint_states is not in this order. Command order is la0..la7, then ra0..ra7.
+# Pose read from the robot. Publishing it holds the arms where they are.
+CURRENT_DUAL_ARM = [
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+]
 
 
 class PantherCommands(Node):
@@ -43,6 +51,8 @@ class PantherCommands(Node):
             10)
         self.head = self.create_publisher(
             Float64MultiArray, "/head_forward_position_controller/commands", 10)
+        self.dual_arm = self.create_publisher(
+            Float64MultiArray, "/dual_arm_forward_position_controller/commands", 10)
 
     def _send(self, publisher, message):
         deadline = time.monotonic() + 1.0
@@ -51,11 +61,12 @@ class PantherCommands(Node):
         publisher.publish(message)
         rclpy.spin_once(self, timeout_sec=0.05)
 
-    def gripper(self, side, position, velocity=0.1):
+    def gripper(self, side, position, velocity=0.1, effort=0.5):
         message = GripperCommand()
         message.command.name = [""]
         message.command.position = [float(position)]
         message.command.velocity = [float(velocity)]
+        message.command.effort = [float(effort)]
         publisher = self.left_gripper if side == "left" else self.right_gripper
         self._send(publisher, message)
 
@@ -78,19 +89,28 @@ class PantherCommands(Node):
         if linear_x or linear_y or angular_z:
             self._stream(self.base, Twist(), 0.5)
 
-    def move_arm(self, side, positions, seconds=6):
-        """Point-to-point. Those controllers start inactive; switch them on the robot first."""
-        if side == "left":
-            publisher, names = self.left_arm, LEFT_ARM
-        else:
-            publisher, names = self.right_arm, RIGHT_ARM
-        point = JointTrajectoryPoint()
-        point.positions = [float(value) for value in positions]
-        point.time_from_start.sec = int(seconds)
-        message = JointTrajectory()
-        message.joint_names = list(names)
-        message.points = [point]
-        self._send(publisher, message)
+    # NOTE: This controller is inactive on boot
+    # def move_arm(self, side, positions, seconds=6):
+    #     """Point-to-point. Those controllers start inactive; switch them on the robot first."""
+    #     if side == "left":
+    #         publisher, names = self.left_arm, LEFT_ARM
+    #     else:
+    #         publisher, names = self.right_arm, RIGHT_ARM
+    #     point = JointTrajectoryPoint()
+    #     point.positions = [float(value) for value in positions]
+    #     point.time_from_start.sec = int(seconds)
+    #     message = JointTrajectory()
+    #     message.joint_names = list(names)
+    #     message.points = [point]
+    #     self._send(publisher, message)
+
+    def move_dual_arm(self, positions, seconds=2.0):
+        """Hold 16 positions: joint_la0..la7, then joint_ra0..ra7. No time scaling."""
+        if len(positions) != 16:
+            raise ValueError("dual arm command needs 16 positions")
+        message = Float64MultiArray()
+        message.data = [float(value) for value in positions]
+        self._stream(self.dual_arm, message, seconds)
 
     def move_head(self, joint_head0, joint_head1, seconds=2.0):
         """Hold a head position. joint_head0 is yaw, joint_head1 is pitch."""
@@ -105,10 +125,11 @@ def main():
 
     # node.gripper("left", position=1.0, velocity=0.1)
     # node.gripper("left", position=0.0, velocity=0.1)
-    node.base_teleop(angular_z=-0.5, seconds=0.5)
+    node.base_teleop(linear_y=0.2, seconds=1.0)
     node.base_teleop()
     # node.move_arm("left", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    node.move_head(0.5, 0.2)
+    node.move_head(0.0, 1.0)
+    #node.move_dual_arm(CURRENT_DUAL_ARM)
 
     node.get_logger().info("publishers ready")
     node.destroy_node()

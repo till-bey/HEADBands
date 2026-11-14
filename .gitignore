@@ -5,3 +5,6 @@ docs/Gmail*
 build/
 install/
 log/
+
+# recorded arm motions
+teach_out/
