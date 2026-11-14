@@ -47,8 +47,6 @@ echo "Cyclone DDS on ${IFACE}, ROS_DOMAIN_ID=15"
 exec docker run --rm \
   "${tty_args[@]}" \
   --network host \
-  --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp \
   -e ROS_DOMAIN_ID=15 \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
