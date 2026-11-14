@@ -3,6 +3,7 @@ FROM ros:jazzy-ros-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-rmw-cyclonedds-cpp \
         ros-jazzy-control-msgs \
+        ros-jazzy-teleop-twist-keyboard \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ROS_DOMAIN_ID=15

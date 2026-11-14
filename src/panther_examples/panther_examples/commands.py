@@ -1,9 +1,11 @@
 """Command publishers for the Panther.
 
-Nothing in main() moves the robot until you uncomment a call.
 Gripper position: 0.0 open, 1.0 closed.
+The drive controller listens on /cmd_vel. teleop_twist_keyboard publishes that
+same topic; /cmd_vel_teleop is only the vendor teleop input.
 """
 
+import subprocess
 import time
 
 import rclpy
@@ -30,7 +32,7 @@ class PantherCommands(Node):
             GripperCommand, "/left_gripper/gripper_command", 10)
         self.right_gripper = self.create_publisher(
             GripperCommand, "/right_gripper/gripper_command", 10)
-        self.base = self.create_publisher(Twist, "/cmd_vel_teleop", 10)
+        self.base = self.create_publisher(Twist, "/cmd_vel", 10)
         self.left_arm = self.create_publisher(
             JointTrajectory,
             "/left_arm_joint_trajectory_position_controller/joint_trajectory",
@@ -57,8 +59,14 @@ class PantherCommands(Node):
         publisher = self.left_gripper if side == "left" else self.right_gripper
         self._send(publisher, message)
 
+    def _stream(self, publisher, message, seconds):
+        end = time.monotonic() + seconds
+        while rclpy.ok() and time.monotonic() < end:
+            publisher.publish(message)
+            rclpy.spin_once(self, timeout_sec=0.1)
+
     def base_teleop(self, linear_x=0.0, linear_y=0.0, angular_z=0.0, seconds=0.0):
-        """One Twist, or a 10 Hz stream for `seconds`. Zeros stop the base."""
+        """Publish /cmd_vel at 10 Hz for `seconds`, then publish zeros."""
         message = Twist()
         message.linear.x = float(linear_x)
         message.linear.y = float(linear_y)
@@ -66,10 +74,9 @@ class PantherCommands(Node):
         if seconds <= 0.0:
             self._send(self.base, message)
             return
-        end = time.monotonic() + seconds
-        while rclpy.ok() and time.monotonic() < end:
-            self.base.publish(message)
-            rclpy.spin_once(self, timeout_sec=0.1)
+        self._stream(self.base, message, seconds)
+        if linear_x or linear_y or angular_z:
+            self._stream(self.base, Twist(), 0.5)
 
     def move_arm(self, side, positions, seconds=6):
         """Point-to-point. Those controllers start inactive; switch them on the robot first."""
@@ -85,11 +92,11 @@ class PantherCommands(Node):
         message.points = [point]
         self._send(publisher, message)
 
-    def move_head(self, joint_head0, joint_head1):
-        """Position command. joint_head0 is pitch, joint_head1 is yaw."""
+    def move_head(self, joint_head0, joint_head1, seconds=2.0):
+        """Hold a head position. joint_head0 is yaw, joint_head1 is pitch."""
         message = Float64MultiArray()
         message.data = [float(joint_head0), float(joint_head1)]
-        self._send(self.head, message)
+        self._stream(self.head, message, seconds)
 
 
 def main():
@@ -98,10 +105,10 @@ def main():
 
     # node.gripper("left", position=1.0, velocity=0.1)
     # node.gripper("left", position=0.0, velocity=0.1)
-    node.base_teleop(angular_z=0.2, seconds=2.0)
+    node.base_teleop(angular_z=-0.5, seconds=0.5)
     node.base_teleop()
     # node.move_arm("left", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    node.move_head(0.2, 0.2)
+    node.move_head(0.5, 0.2)
 
     node.get_logger().info("publishers ready")
     node.destroy_node()
