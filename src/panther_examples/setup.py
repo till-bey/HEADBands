@@ -21,6 +21,7 @@ setup(
             "commands = panther_examples.commands:main",
             "teach = panther_examples.teach:main",
             "cartesian_follow = panther_examples.cartesian_follow:main",
+            "joint_check = panther_examples.joint_check:main",
         ],
     },
 )
