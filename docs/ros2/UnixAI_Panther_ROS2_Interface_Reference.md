@@ -291,7 +291,7 @@ Every command below moves an 80 kg robot: read the current state first, keep the
 | --- | --- | --- |
 | Base `linear.x`, `linear.y` | ±0.2 m/s used by the PR 521 driver | driver choice, not a robot limit |
 | Base `angular.z` | ±0.3 rad/s used by the PR 521 driver | driver choice |
-| Lift position | SDK: 0.0–0.8 m. URDF limit 0.6; robot reads about 0.61; PR 521 caps at 0.65 | conflicting: stay under 0.6 until the vendor confirms |
+| Lift position | 0 (bottom) to 0.8 m (top), as in the SDK and the 800 mm travel in the user guide. The URDF has 0 to 0.6 with the axis pointing down, which is wrong. PR 521 caps at 0.65; the robot was seen reading about 0.61. Top not yet confirmed: echo `/lifting_controller/joint_states` at the top end stop | team, 2026-11-14; SDK |
 | Lift velocity | −0.05 to 0.05 m/s | SDK |
 | Gripper `position` | 0 = open, 1 = closed | SDK example, PR 521 |
 | `joint_head0` | −0.348 to 1.5 rad (pitch) | URDF via PR 521 |

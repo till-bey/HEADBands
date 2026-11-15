@@ -52,7 +52,7 @@ The robot's command topics work here, with the robot's message types:
 | `left_arm_joint_trajectory_position_controller` (inactive at start) | same controller | `joint_la0..7` |
 | `right_arm_joint_trajectory_position_controller` (inactive at start) | same controller | `joint_ra0..7` |
 | `head_forward_position_controller` (active at start) | same controller | `joint_head0`, `joint_head1` |
-| `/lifting_controller/commands` (JointState: `position` m, or `velocity` m/s) | `robot_topics.py` → `lifting_joint_trajectory_controller` | `body_joint`, 0 to 0.6 m, at most 0.05 m/s |
+| `/lifting_controller/commands` (JointState: `position` m, or `velocity` m/s) | `robot_topics.py` → `lifting_joint_trajectory_controller` | `body_joint`, 0 (bottom) to 0.8 m (top), at most 0.05 m/s |
 | `/left_gripper/gripper_command`, `/right_gripper/gripper_command` (`unix_msgs/GripperCommand`) | `robot_topics.py` → `left_` / `right_gripper_joint_trajectory_controller` | `joint_lf` / `joint_rf`, 0 open to 1 closed |
 | `/lifting_controller/joint_states`, `/left_gripper/joint_states`, `/right_gripper/joint_states` | published by `robot_topics.py` | |
 
@@ -111,12 +111,12 @@ The launch file removes the vendor `<ros2_control>` and `<gazebo>` blocks, becau
 
 The vendor URDF has the lift and grippers fixed, and `ros2_control` rejects fixed joints, so the launch file changes the sim copy:
 
-- `body_joint` becomes prismatic, with the vendor axis (`0 0 -1`) and limit (0 to 0.6 m) and a 0.05 m/s velocity (the SDK limit). With that axis a larger value lowers the torso. Whether the robot's lift goes the same way is not confirmed.
+- `body_joint` becomes prismatic, 0 (bottom) to 0.8 m (top), at 0.05 m/s (the SDK limit). The vendor URDF has it backwards (axis `0 0 -1`, limit 0 to 0.6), so the sim flips the axis to `0 0 1` and takes the vendor body height (1.363 m above `base_link`) as the top. At 0 the body is 0.563 m above `base_link`. The sim starts at 0.4 (body 0.963 m above `base_link`).
 - The vendor `joint_lf` / `joint_rf` stay fixed, renamed `joint_lf_mount` / `joint_rf_mount`, so `link_lf` / `link_rf` and the IK in `cartesian_follow.py` are unchanged. A new `joint_lf` / `joint_rf` (0 to 1) hangs off them on an empty link, and the two finger roots of each gripper (`joint_lf00`, `joint_lf10`) mimic it with 0.7 rad of swing at 1.0. The swing is a stand-in so the gripper visibly closes, not the real finger kinematics.
 
 ## Gotchas
 
-- `Controller already loaded, skipping load_controller` and then `no controller with this name exists` mean another sim is already running on domain 77, and your spawners talked to its controller manager. Stop it first: `pkill -f mock_sim.launch.py`.
+- Run one sim at a time. On domain 77, a second sim, or a `robot_state_publisher` left over from a killed launch, clashes with yours. Symptoms: `Controller already loaded, skipping load_controller` then `no controller with this name exists`, or `command interface 'body_joint/position' is not available` (the controller manager loaded the old URDF). A leftover publisher shows as `Publisher count: 2` in `ros2 topic info /robot_description`. Stop everything, then relaunch: `pkill -f 'mock_sim.launch.py|robot_state_publisher|ros2_control_node'`.
 
 - The vendor URDF has `velocity="0"` on every arm joint. rqt divides by it and crashes. The launch file sets the sim copy to 0.5 rad/s, our chosen limit, not a vendor spec. The robot's own `/robot_description` has the same zeros, so rqt pointed at the real robot will hit this too.
 - From a VS Code **snap** terminal, RViz and rqt crash (`libpthread ... GLIBC_PRIVATE`, `GLib-GIO-ERROR`). Run them from a normal terminal.

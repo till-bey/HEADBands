@@ -15,7 +15,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-LIFT_MIN, LIFT_MAX, LIFT_VEL = 0.0, 0.6, 0.05  # URDF range; SDK speed limit
+LIFT_MIN, LIFT_MAX, LIFT_VEL = 0.0, 0.8, 0.05  # m, 0 = bottom; SDK range and speed limit
 # shortcut: gripper speed when a command gives none; the real gripper speed is unmeasured, time it on the robot.
 GRIPPER_VEL = 1.0  # full stroke per second
 # joint: (sim controller, robot state topic)

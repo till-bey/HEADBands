@@ -20,6 +20,7 @@ ARM_HEAD = [f"joint_{s}a{i}" for s in "lr" for i in range(8)] + ["joint_head0", 
 # Lift (base z axis) and grippers: the vendor URDF has them fixed; robot_description() frees them.
 LIFT_GRIPPERS = ["body_joint", "joint_lf", "joint_rf"]
 LIFT_VEL = "0.05"   # m/s, the SDK lift limit
+LIFT_TOP = 0.8      # m; lift runs 0 (bottom) to 0.8 (SDK, 800 mm travel; top unconfirmed on the robot); the vendor body height is the top
 FINGER_CLOSE = 0.7  # rad of stand-in finger swing at gripper 1.0 (closed); looks right, not a vendor value
 WHEELS = [f"joint_{w}_{k}" for w in ("fl", "fr", "bl", "br") for k in ("rev", "con")]
 # The vendor URDF gives every arm joint velocity="0"; rqt divides by it. 0.5 rad/s is our choice;
@@ -68,8 +69,14 @@ def robot_description(urdf_path, mesh_dir):
             lim.set("velocity", SIM_ARM_VEL)
     by_name = {j.get("name"): j for j in root.findall("joint")}
     if by_name["body_joint"].get("type") == "fixed":
-        by_name["body_joint"].set("type", "prismatic")  # vendor axis and 0-0.6 m limit kept
-        by_name["body_joint"].find("limit").set("velocity", LIFT_VEL)
+        # The vendor joint (axis 0 0 -1, limit 0-0.6) has the direction wrong: 0 is the bottom, so the axis goes
+        # up and the origin drops by the full travel to put the vendor height at the top.
+        lift = by_name["body_joint"]
+        lift.set("type", "prismatic")
+        lift.find("axis").set("xyz", "0 0 1")
+        lift.find("limit").attrib.update(lower="0", upper=str(LIFT_TOP), velocity=LIFT_VEL)
+        x, y, z = (float(v) for v in lift.find("origin").get("xyz").split())
+        lift.find("origin").set("xyz", f"{x} {y} {z - LIFT_TOP}")
     for s in "lr":
         if by_name[f"joint_{s}f"].get("type") != "fixed":
             continue
@@ -90,8 +97,8 @@ def robot_description(urdf_path, mesh_dir):
 
     joints = "".join(
         f'<joint name="{j}"><command_interface name="position"/>'
-        '<state_interface name="position"><param name="initial_value">0.0</param></state_interface>'
-        '<state_interface name="velocity"/></joint>' for j in ARM_HEAD + LIFT_GRIPPERS)
+        f'<state_interface name="position"><param name="initial_value">{LIFT_TOP / 2 if j == "body_joint" else 0.0}</param>'
+        '</state_interface><state_interface name="velocity"/></joint>' for j in ARM_HEAD + LIFT_GRIPPERS)
     # Wheels are state-only so robot_state_publisher gets a TF for them.
     joints += "".join(f'<joint name="{j}"><state_interface name="position"/></joint>' for j in WHEELS)
     root.append(ET.fromstring('<ros2_control name="panther_mock" type="system"><hardware>'
