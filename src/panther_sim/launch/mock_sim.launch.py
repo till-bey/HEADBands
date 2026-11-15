@@ -1,21 +1,21 @@
 """Panther arms, head, lift and grippers on ros2_control mock hardware, shown in RViz, driven from rqt. No physics.
 Always runs on ROS_DOMAIN_ID 77, localhost only, whatever the terminal is set to.
 
-ros2 launch docs/ros2/mock-sim/mock_sim.launch.py
+ros2 launch panther_sim mock_sim.launch.py
   urdf:=<path>    full URDF captured from the robot (default: the stripped one from PR #521)
   meshes:=<dir>   local copy of the robot's /opt/ros/humble/share/mh3_description
 """
 import math
 import os
-import sys
 import xml.etree.ElementTree as ET
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-HERE = os.path.dirname(os.path.realpath(__file__))
+SHARE = get_package_share_directory("panther_sim")
 ARM_HEAD = [f"joint_{s}a{i}" for s in "lr" for i in range(8)] + ["joint_head0", "joint_head1"]
 # Lift (base z axis) and grippers: the vendor URDF has them fixed; robot_description() frees them.
 LIFT_GRIPPERS = ["body_joint", "joint_lf", "joint_rf"]
@@ -116,7 +116,7 @@ def nodes(context):
     return [
         Node(package="robot_state_publisher", executable="robot_state_publisher", parameters=[desc]),
         Node(package="controller_manager", executable="ros2_control_node",
-             parameters=[os.path.join(HERE, "controllers.yaml")], output="screen"),
+             parameters=[os.path.join(SHARE, "config", "controllers.yaml")], output="screen"),
         # As on the robot: the forward controller owns both arms; the per-arm trajectory controllers
         # are loaded inactive and switched in for a move (cartesian_follow.py, PR #521 driver).
         spawn("joint_state_broadcaster", "dual_arm_forward_position_controller", "head_forward_position_controller",
@@ -125,8 +125,8 @@ def nodes(context):
         spawn("--inactive", "left_arm_joint_trajectory_position_controller",
               "right_arm_joint_trajectory_position_controller", "head_joint_trajectory_controller"),
         # The robot's lift and gripper topics (its controllers for them are vendor plugins).
-        ExecuteProcess(cmd=[sys.executable, os.path.join(HERE, "robot_topics.py")], output="screen"),
-        Node(package="rviz2", executable="rviz2", arguments=["-d", os.path.join(HERE, "panther.rviz")]),
+        Node(package="panther_sim", executable="robot_topics", output="screen"),
+        Node(package="rviz2", executable="rviz2", arguments=["-d", os.path.join(SHARE, "config", "panther.rviz")]),
         Node(package="rqt_joint_trajectory_controller", executable="rqt_joint_trajectory_controller"),
     ]
 
@@ -141,7 +141,7 @@ def generate_launch_description():
         SetEnvironmentVariable("ROS_DOMAIN_ID", SIM_DOMAIN),
         SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST"),
         UnsetEnvironmentVariable("CYCLONEDDS_URI"),  # robot setups pin it to the robot's NIC
-        DeclareLaunchArgument("urdf", default_value=os.path.join(HERE, "panther.urdf")),
+        DeclareLaunchArgument("urdf", default_value=os.path.join(SHARE, "urdf", "panther.urdf")),
         DeclareLaunchArgument("meshes", default_value=""),
         OpaqueFunction(function=nodes),
     ])

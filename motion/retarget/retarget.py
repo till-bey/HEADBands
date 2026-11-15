@@ -5,9 +5,9 @@ Joint angles are copied, not hand positions, so the robot's arm takes the human'
 - ra1, ra2, ra3 (spherical shoulder) and ra4 (elbow): solved in closed form from the upper-arm and forearm directions.
   ra2 only swings the arm outward, so when the arm crosses in front of the body ra0 (yaw about z) turns it inward.
   With the elbow nearly straight the upper-arm twist (ra3) is undefined and the neighbouring value is held.
-- ra5 = 0. Wrist flick like example_1/to_path.py: FLICK_DEG[0] (fingers back), then to FLICK_DEG[1] over the last
+- ra5 = 0. Wrist flick like motion/to_path/to_path.py: FLICK_DEG[0] (fingers back), then to FLICK_DEG[1] over the last
   FLICK_PART of the crop, its speed rising from zero to the release. It runs on ra6 or ra7, whichever axis is closer
-  to body z at the release (example_1 turns the hand about body z), signed so the fingers swing in the hand's direction.
+  to body z at the release (to_path turns the hand about body z), signed so the fingers swing in the hand's direction.
 After the release, every joint keeps its release speed, decaying linearly to zero over SLOW_DOWN_S.
 Angles outside the joint limits are clipped (reported). Time is stretched so no joint exceeds VEL_CAP.
 Output: joints_<recording>.csv here, rows t,q_ra0..q_ra7, for cartesian_follow.py --arm right --joints FILE.
@@ -23,10 +23,10 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import savgol_filter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, ".."))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples", "panther_examples"))
 from cartesian_follow import Chain, spline_peak, timed  # noqa: E402
 
-URDF = os.path.join(HERE, "..", "..", "mock-sim", "panther.urdf")
+URDF = os.path.join(HERE, "..", "..", "src", "panther_sim", "urdf", "panther.urdf")
 # Recording axes -> body_link axes (x forward, y left, z up). The recording is believed to be the same, but not
 # certain: if the arm moves rotated or mirrored compared to visualize.py, fix this matrix.
 TO_BODY = np.eye(3)

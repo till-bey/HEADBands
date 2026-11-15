@@ -20,6 +20,7 @@ setup(
         "console_scripts": [
             "commands = panther_examples.commands:main",
             "teach = panther_examples.teach:main",
+            "cartesian_follow = panther_examples.cartesian_follow:main",
         ],
     },
 )

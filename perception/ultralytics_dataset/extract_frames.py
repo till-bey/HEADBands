@@ -96,8 +96,8 @@ def flatten_screenshots(source_dir, flat_output_dir):
 
 if __name__ == "__main__":
     # Configure your folders here
-    INPUT_FOLDER = "/home/till/epfl/leukerbad/HEADBands/Detect/ultralytics_dataset/videos"
-    OUTPUT_FOLDER = "/home/till/epfl/leukerbad/HEADBands/Detect/ultralytics_dataset/screenshots"
+    INPUT_FOLDER = Path(__file__).parent / "videos"
+    OUTPUT_FOLDER = Path(__file__).parent / "screenshots"
     
     # extract_screenshots(INPUT_FOLDER, OUTPUT_FOLDER, num_screenshots=10)
     flatten_screenshots(OUTPUT_FOLDER, OUTPUT_FOLDER)

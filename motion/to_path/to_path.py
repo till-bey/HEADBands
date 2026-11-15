@@ -23,7 +23,7 @@ import numpy as np
 import PyKDL as kdl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, ".."))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples", "panther_examples"))
 from cartesian_follow import Chain, plan, spline_peak, timed  # noqa: E402
 
 ARM = "right"
@@ -38,7 +38,7 @@ SLOW_DOWN_S = 0.2          # after release, hand motion and flick keep going, de
 VEL_CAP = 3.0     # rad/s: no path needing a faster joint is written. No vendor limit is known; PR #521 uses 0.35
 MIN_MARGIN = 0.02  # rad every joint keeps from its limits along the whole path
 CANDIDATES = 2000  # IK seeds tried for the start configuration
-URDF = os.path.join(HERE, "..", "..", "mock-sim", "panther.urdf")  # the robot's kinematics, from PR #521
+URDF = os.path.join(HERE, "..", "..", "src", "panther_sim", "urdf", "panther.urdf")  # the robot's kinematics, from PR #521
 
 src = sys.argv[1] if len(sys.argv) > 1 else HERE
 out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "path.csv")
