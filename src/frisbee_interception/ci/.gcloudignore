@@ -1,0 +1,13 @@
+# Upload only what the frisbee CI needs (see cloudbuild.yaml)
+/*
+!/src/
+/src/*
+!/src/frisbee_msgs/
+!/src/frisbee_interception/
+!/perception/
+/perception/*
+!/perception/Dataset/
+/perception/Dataset/*
+!/perception/Dataset/Videos/
+**/__pycache__/
+**/*.pyc

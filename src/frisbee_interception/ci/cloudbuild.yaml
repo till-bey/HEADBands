@@ -1,0 +1,26 @@
+# Frisbee interception CI on Google Cloud Build (CPU only, no GPU). From the repository root:
+#
+#   gcloud builds submit . --config src/frisbee_interception/ci/cloudbuild.yaml \
+#       --ignore-file src/frisbee_interception/ci/.gcloudignore --region europe-west6
+#
+# Builds frisbee_msgs + frisbee_interception with colcon on ROS 2 Humble, runs the unit tests, runs the full
+# ROS launch on a synthetic throw (image mode disarmed + metric mode with TF, arming and /frisbee/disable),
+# replays the recorded clips offline, and uploads everything to gs://<project>_cloudbuild/frisbee-ci/<build id>/.
+steps:
+  - id: ci
+    name: osrf/ros:humble-desktop
+    entrypoint: bash
+    args: ["src/frisbee_interception/ci/run_ci.sh"]
+  - id: upload
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud storage cp -r ci_out gs://${PROJECT_ID}_cloudbuild/frisbee-ci/${BUILD_ID}/ --quiet
+        echo "artifacts: gs://${PROJECT_ID}_cloudbuild/frisbee-ci/${BUILD_ID}/ci_out/"
+        exit $$(cat ci_out/exit_code)
+timeout: 2400s
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,99 @@
+# Frisbee detection, tracking and interception. All values are starting points to tune on your camera.
+# Calibration values are deliberately NOT filled in: see docs/frisbee_interception.md for how to measure them.
+
+frisbee_detector:
+  ros__parameters:
+    image_transport: compressed     # raw | compressed (<image>/compressed); the launch file's argument overrides it
+    publish_debug: true             # /frisbee/debug/detections, drawn only while someone subscribes
+    max_debug_width: 640
+    detection:
+      # motion: three-frame differencing with shake compensation (default, no color assumption)
+      # background: MOG2 background model (best for a fixed camera)
+      # hsv / motion_and_hsv / background_and_hsv: optional color gate, set hsv_lower/upper for your disc
+      method: motion
+      processing_width: 360         # detection runs at this width; coordinates are reported at full resolution
+      blur_kernel: 5
+      motion_threshold: 25
+      stabilize: true
+      bg_history: 90
+      bg_var_threshold: 32.0
+      bg_warmup_frames: 5
+      hsv_lower: [0, 0, 170]        # example: bright, low-saturation disc; change for a colored disc
+      hsv_upper: [180, 70, 255]
+      open_kernel: 3
+      close_kernel: 7
+      min_area_px: 30.0             # processing pixels
+      max_area_frac: 0.25
+      min_axis_px: 6.0
+      min_aspect: 0.06              # minor/major: an edge-on disc in flight is very thin
+      min_solidity: 0.75
+      min_ellipse_fill: 0.5
+      min_confidence: 0.35
+      max_detections: 5
+      roi: [0.0, 0.0, 1.0, 1.0]     # x0 y0 x1 y1 as image fractions
+
+frisbee_tracker:
+  ros__parameters:
+    tracking:
+      min_hits: 3
+      min_motion_px_s: 15.0         # must move or grow this fast to be confirmed (head-on throws barely move)
+      max_coast_s: 0.25
+      max_tracks: 4
+      gate_base_px: 40.0
+      gate_sigma: 4.0
+      max_size_ratio: 1.8
+      min_confidence: 0.3
+      accel_noise_px: 1000.0
+      size_accel_noise_px: 800.0
+      meas_noise_px: 4.0
+      size_meas_noise_frac: 0.08
+      history_len: 20
+      max_dt_s: 0.5
+
+frisbee_interceptor:
+  ros__parameters:
+    target_frame: body_link         # robot frame the catch point is expressed in (torso, rides on the lift)
+    camera_frame: ""                # empty: use the frame_id of the images
+    publish_debug: true
+    # Camera intrinsics: preferably from sensor_msgs/CameraInfo (phone_camera calibration_file). These are only
+    # used when no CameraInfo arrives. 0 = unknown -> metric mode off.
+    camera:
+      fx: 0.0
+      fy: 0.0
+      cx: 0.0
+      cy: 0.0
+    # Catching plane in target_frame (metric mode). Unset -> metric mode off. Example, NOT measured:
+    # point: [0.45, 0.0, 0.0], normal: [1.0, 0.0, 0.0]  (a vertical plane 0.45 m in front of body_link)
+    catch_plane:
+      point: [0.0]
+      normal: [0.0]
+    # Image-mode calibration (no intrinsics / no TF): see "Catching-plane calibration" in the docs.
+    image_calibration:
+      homography: [0.0]             # 9 numbers, pixel -> (a, b) metres on the catching plane
+      plane_origin: [0.0]           # target_frame point of (a, b) = (0, 0)
+      plane_axis_a: [0.0]           # target_frame unit vector of +a
+      plane_axis_b: [0.0]           # target_frame unit vector of +b
+    prediction:
+      frisbee_diameter_m: 0.27      # measure your frisbee
+      catch_diameter_px: 0.0        # image mode: apparent diameter at the catching plane (calibrate)
+      min_points: 4
+      max_points: 12
+      min_span_s: 0.06
+      min_approach_speed_mps: 0.5
+      min_size_growth: 0.3          # 1/d must shrink 30% over the fit window: earlier TTC estimates are biased
+      max_size_fit_residual: 0.12
+      max_time_to_intercept_s: 2.0
+      min_time_to_intercept_s: 0.0
+      max_position_sigma_m: 0.25
+      max_pixel_sigma: 60.0
+      max_time_sigma_s: 0.15
+    safety:
+      max_data_age_s: 0.25          # older camera data is never used
+      track_timeout_s: 0.5          # publish 'invalid' when tracks stop arriving
+      min_confidence: 0.5           # catch targets need at least this prediction confidence
+      workspace_min: [0.0]          # target_frame box [x y z]; unset -> no catch target is ever sent
+      workspace_max: [0.0]
+      max_target_step_m: 0.3        # refuse a new target this far from the previous one
+      min_time_to_intercept_s: 0.1
+    interception:
+      enabled: false                # prediction-only. Arm with ~/enable_interception, disarm with /frisbee/disable
