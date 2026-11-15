@@ -19,12 +19,18 @@
   let frames = [];
 
   function setStatus(text) {
-    if (statusEl) statusEl.textContent = text;
+    if (statusEl && statusEl.textContent !== text) statusEl.textContent = text;
   }
 
   function setRunning(on) {
     running = on;
-    toggle.textContent = on ? "■ Stop live camera" : "▶ Start live camera";
+    const label = toggle.querySelector(".btn-label");
+    const text = on ? "Stop live camera" : "Start live camera";
+    if (label) label.textContent = text;
+    else toggle.textContent = text;
+    const use = toggle.querySelector("use");
+    if (use) use.setAttribute("href", on ? "#i-stop" : "#i-play");
+    toggle.setAttribute("aria-pressed", on ? "true" : "false");
     toggle.classList.toggle("btn-secondary", on);
     toggle.classList.toggle("btn-primary", !on);
     if (on) loop();

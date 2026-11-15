@@ -33,6 +33,17 @@
   const playbackQueue = [];
   let currentAudio = null;
 
+  // Update text only when it changes, so role="status" regions are not re-announced on every poll.
+  function setText(el, text) {
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  function setBadge(el, text, variant) {
+    setText(el, text);
+    const cls = `badge ${variant}`;
+    if (el.className !== cls) el.className = cls;
+  }
+
   function appendMessage(role, text, meta = "", gloss = null, robotNote = null) {
     const div = document.createElement("div");
     div.className = `msg ${role === "user" ? "msg-user" : "msg-assistant"}`;
@@ -100,13 +111,11 @@
     ws = new WebSocket(`${proto}//${window.location.host}/ws/voice?${params.toString()}`);
 
     ws.onopen = () => {
-      wsBadge.textContent = "WS: Connected";
-      wsBadge.className = "badge badge-ok";
+      setBadge(wsBadge, "Voice: Connected", "badge-ok");
     };
 
     ws.onclose = () => {
-      wsBadge.textContent = "WS: Reconnecting...";
-      wsBadge.className = "badge badge-neutral";
+      setBadge(wsBadge, "Voice: Reconnecting…", "badge-neutral");
       setTimeout(connectWebSocket, 2500);
     };
 
@@ -201,12 +210,13 @@
   function syncDialectControlState() {
     const usesSwissDialect = languageSelect.value === "auto" || languageSelect.value === "gsw";
     dialectSelect.disabled = !usesSwissDialect;
-    dialectSelect.style.opacity = usesSwissDialect ? "1" : "0.55";
   }
 
   function pushConfigUpdate() {
     syncDialectControlState();
-    rateLabel.textContent = `${Number(rateSlider.value).toFixed(2)}x`;
+    const rate = Number(rateSlider.value).toFixed(2);
+    rateLabel.textContent = `${rate}x`;
+    rateSlider.setAttribute("aria-valuetext", `${rate} times`);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(
         JSON.stringify({
@@ -265,8 +275,7 @@
   async function toggleMicrophone() {
     if (isRecording) {
       isRecording = false;
-      micToggleBtn.textContent = "Start Microphone (16 kHz PCM)";
-      micToggleBtn.classList.remove("btn-recording");
+      setMicButton(false);
       vadMeterFill.style.width = "0%";
       if (scriptNode) scriptNode.disconnect();
       if (audioCtx) await audioCtx.close();
@@ -301,8 +310,19 @@
     source.connect(scriptNode);
     scriptNode.connect(audioCtx.destination);
     isRecording = true;
-    micToggleBtn.textContent = "Stop Microphone (Send Utterance)";
-    micToggleBtn.classList.add("btn-recording");
+    setMicButton(true);
+  }
+
+  function setMicButton(recording) {
+    const label = micToggleBtn.querySelector(".btn-label");
+    const text = recording ? "Stop and send" : "Start microphone";
+    if (label) label.textContent = text;
+    else micToggleBtn.textContent = text;
+    const use = micToggleBtn.querySelector("use");
+    if (use) use.setAttribute("href", recording ? "#i-stop" : "#i-mic");
+    micToggleBtn.setAttribute("aria-pressed", recording ? "true" : "false");
+    micToggleBtn.classList.toggle("btn-recording", recording);
+    micToggleBtn.classList.toggle("btn-primary", !recording);
   }
 
   micToggleBtn.addEventListener("click", () => {
@@ -327,12 +347,16 @@
   function updateRobotBadge(statusObj) {
     if (!statusObj) return;
     if (statusObj.estop_active || statusObj.state === "estop") {
-      robotBadge.textContent = "Robot: E-STOP LATCHED";
-      robotBadge.className = "badge badge-danger";
+      setBadge(robotBadge, "Robot: E-stop latched", "badge-danger");
       resetEstopBtn.classList.remove("hidden");
     } else {
-      robotBadge.textContent = `Robot: ${statusObj.state.toUpperCase()} (${Math.round(statusObj.battery_percent)}%)`;
-      robotBadge.className = "badge badge-ok";
+      const state = String(statusObj.state || "unknown");
+      const pretty = state.charAt(0).toUpperCase() + state.slice(1);
+      if (statusObj.bridge_connected) {
+        setBadge(robotBadge, `Robot: ${pretty} · ${Math.round(statusObj.battery_percent)}%`, "badge-ok");
+      } else {
+        setBadge(robotBadge, "Robot: Not connected", "badge-neutral");
+      }
       resetEstopBtn.classList.add("hidden");
     }
     if (pantherTelemetryBar) {
@@ -348,7 +372,10 @@
         extras.push(`Front LiDAR: ${Number(statusObj.front_obstacle_distance_m).toFixed(2)}m`);
       }
       const extraSuffix = extras.length > 0 ? ` · ${extras.join(" · ")}` : "";
-      pantherTelemetryBar.textContent = `Panther ROS 2 (${linkTxt}) · Domain ${statusObj.ros_domain_id || 15} · Camera: ${camTxt}${extraSuffix}`;
+      setText(
+        pantherTelemetryBar,
+        `Panther ROS 2 (${linkTxt}) · Domain ${statusObj.ros_domain_id || 15} · Camera: ${camTxt}${extraSuffix}`
+      );
     }
   }
 

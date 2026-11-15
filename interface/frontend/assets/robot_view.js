@@ -236,8 +236,17 @@
     }
   }
 
+  let lastStatusAt = 0;
   function setStatus() {
     if (!statusEl) return;
+    const now = performance.now();
+    if (now - lastStatusAt < 500) return; // text twice a second, not every animation frame
+    lastStatusAt = now;
+    const q = positions;
+    const fmt = (v) => (typeof v === "number" ? `${((v * 180) / Math.PI).toFixed(0)}°` : "unknown");
+    const lift = typeof q.body_joint === "number" ? `${q.body_joint.toFixed(2)} m` : "unknown";
+    const label = `3D view of the robot's pose. Lift ${lift}, head ${fmt(q.joint_head0)} and ${fmt(q.joint_head1)}.`;
+    if (canvas.getAttribute("aria-label") !== label) canvas.setAttribute("aria-label", label);
     const reported = model
       ? model.joints.filter((j) => !j.mimic && (j.type === "revolute" || j.type === "prismatic") && j.name in positions).length
       : 0;
@@ -295,6 +304,24 @@
     e.preventDefault();
     view.dist = Math.max(1.2, Math.min(7, view.dist * (e.deltaY > 0 ? 1.1 : 0.9)));
   }, { passive: false });
+  canvas.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 15 : 5;
+    const actions = {
+      ArrowLeft: () => (view.yaw += step),
+      ArrowRight: () => (view.yaw -= step),
+      ArrowUp: () => (view.pitch = Math.min(80, view.pitch + step)),
+      ArrowDown: () => (view.pitch = Math.max(0, view.pitch - step)),
+      "+": () => (view.dist = Math.max(1.2, view.dist * 0.9)),
+      "=": () => (view.dist = Math.max(1.2, view.dist * 0.9)),
+      "-": () => (view.dist = Math.min(7, view.dist * 1.1)),
+      0: () => Object.assign(view, DEFAULT_VIEW),
+    };
+    const act = actions[e.key];
+    if (act) {
+      e.preventDefault();
+      act();
+    }
+  });
   if (resetBtn) resetBtn.addEventListener("click", () => Object.assign(view, DEFAULT_VIEW));
   if (demoToggle) demoToggle.addEventListener("change", () => {
     demoStart = performance.now();

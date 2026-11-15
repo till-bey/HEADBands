@@ -3,52 +3,80 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Swiss Multilingual Voice &amp; Robotics Assistant — Leukerbad</title>
+  <meta name="color-scheme" content="dark light" />
+  <title>Leukerbad Voice &amp; Robotics Assistant</title>
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <!-- Inline icon sprite (decorative; every use is aria-hidden) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-7-8-1z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></symbol>
+    <symbol id="i-robot" viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M3 13v2M21 13v2"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  </svg>
+
   <header class="topbar">
     <div class="brand">
-      <span class="swiss-cross" aria-hidden="true">+</span>
+      <span class="swiss-cross" aria-hidden="true"></span>
       <div>
         <h1>Leukerbad Voice &amp; Robotics Assistant</h1>
-        <p class="subtitle">Auto-Detect · Schwiizerdütsch (Wallisertiitsch) · Deutsch · Français · English · Español · Čeština · 中文 · Gemini Robotics ER 2</p>
+        <p class="subtitle">Swiss German, German, French, English, Spanish, Czech and Chinese · Gemini Robotics ER 2</p>
       </div>
     </div>
-    <div class="status-cluster">
-      <span id="wsBadge" class="badge badge-neutral">WS: Disconnected</span>
-      <span id="robotBadge" class="badge badge-ok">Robot: Ready</span>
-      <button id="estopBtn" class="btn btn-estop" type="button">EMERGENCY STOP</button>
+    <div class="status-cluster" role="group" aria-label="System status and safety">
+      <span id="wsBadge" class="badge badge-neutral" role="status">Voice: Connecting…</span>
+      <span id="robotBadge" class="badge badge-neutral" role="status">Robot: Checking…</span>
+      <button id="estopBtn" class="btn btn-estop" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+        Emergency stop
+      </button>
       <button id="resetEstopBtn" class="btn btn-ghost hidden" type="button">Reset E-Stop</button>
     </div>
   </header>
 
-  <main class="grid-layout">
-    <!-- Left Column: Voice Controls & Live Conversation -->
-    <section class="card conversation-panel">
+  <main id="main" class="grid-layout" tabindex="-1">
+    <!-- Conversation -->
+    <section class="card conversation-panel" aria-labelledby="conversationTitle">
+      <div class="card-header">
+        <h2 id="conversationTitle" class="card-title">
+          <svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>
+          Conversation
+        </h2>
+      </div>
+
       <div class="controls-row">
-        <label>
+        <label for="languageSelect">
           Language
           <select id="languageSelect">
-            <option value="auto" selected>Auto-Detect (CH-DE / DE / FR / EN / ES / CS / 中文)</option>
-            <option value="gsw">Schwiizerdütsch (gsw)</option>
-            <option value="de-DE">Hochdeutsch (de-DE)</option>
-            <option value="de-CH">Schweizer Hochdeutsch (de-CH)</option>
-            <option value="fr-FR">Français (fr-FR)</option>
-            <option value="fr-CH">Français Suisse (fr-CH)</option>
-            <option value="en-US">English (en-US)</option>
-            <option value="en-GB">English UK (en-GB)</option>
-            <option value="es-ES">Español — España (es-ES)</option>
-            <option value="es-US">Español — Latinoamérica (es-US)</option>
-            <option value="cs-CZ">Čeština — Czech (cs-CZ)</option>
-            <option value="zh-CN">中文 — Mandarin Simplified (zh-CN)</option>
-            <option value="zh-TW">繁體中文 — Mandarin Traditional (zh-TW)</option>
+            <option value="auto" selected>Auto-detect</option>
+            <option value="gsw" lang="gsw">Schwiizerdütsch (gsw)</option>
+            <option value="de-DE" lang="de-DE">Hochdeutsch (de-DE)</option>
+            <option value="de-CH" lang="de-CH">Schweizer Hochdeutsch (de-CH)</option>
+            <option value="fr-FR" lang="fr-FR">Français (fr-FR)</option>
+            <option value="fr-CH" lang="fr-CH">Français suisse (fr-CH)</option>
+            <option value="en-US" lang="en-US">English (en-US)</option>
+            <option value="en-GB" lang="en-GB">English UK (en-GB)</option>
+            <option value="es-ES" lang="es-ES">Español — España (es-ES)</option>
+            <option value="es-US" lang="es-US">Español — Latinoamérica (es-US)</option>
+            <option value="cs-CZ" lang="cs-CZ">Čeština (cs-CZ)</option>
+            <option value="zh-CN" lang="zh-CN">中文 简体 (zh-CN)</option>
+            <option value="zh-TW" lang="zh-TW">中文 繁體 (zh-TW)</option>
           </select>
         </label>
 
-        <label>
-          Swiss Dialect (Piper TTS)
-          <select id="dialectSelect">
+        <label for="dialectSelect">
+          Swiss dialect (voice)
+          <select id="dialectSelect" aria-describedby="dialectHint">
             <option value="vs" selected>Valais / Leukerbad (Wallisertiitsch)</option>
             <option value="zh">Zürich (Züridütsch)</option>
             <option value="be">Bern (Bärndütsch)</option>
@@ -58,54 +86,70 @@
             <option value="ag">Aargau (Aargauerdütsch)</option>
             <option value="gr">Graubünden (Bündnerdütsch)</option>
           </select>
+          <span id="dialectHint" class="field-hint">Used with Auto-detect and Schwiizerdütsch.</span>
         </label>
 
-        <label>
-          Speed (<span id="rateLabel">1.00x</span>)
-          <input id="rateSlider" type="range" min="0.7" max="1.4" step="0.05" value="1.0" />
+        <label for="rateSlider">
+          <span>Speaking speed <output id="rateLabel" class="rate-value" for="rateSlider">1.00x</output></span>
+          <input id="rateSlider" type="range" min="0.7" max="1.4" step="0.05" value="1.0" aria-valuetext="1.00 times" />
         </label>
       </div>
 
       <div class="mic-bar">
-        <button id="micToggleBtn" class="btn btn-primary" type="button">Start Microphone (16 kHz PCM)</button>
-        <button id="interruptBtn" class="btn btn-secondary" type="button">Interrupt / Stop Audio</button>
-        <div class="vad-meter-wrap" title="Voice Activity RMS Level">
+        <button id="micToggleBtn" class="btn btn-primary" type="button" aria-pressed="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg>
+          <span class="btn-label">Start microphone</span>
+        </button>
+        <button id="interruptBtn" class="btn btn-secondary" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>
+          Stop audio
+        </button>
+        <div class="vad-meter-wrap" aria-hidden="true">
           <div id="vadMeterFill" class="vad-meter-fill"></div>
         </div>
-        <span id="partialStatus" class="muted-text">Idle</span>
+        <span id="partialStatus" class="mic-status" role="status">Idle</span>
       </div>
 
-      <div id="chatTimeline" class="chat-timeline" aria-live="polite"></div>
+      <div id="chatTimeline" class="chat-timeline" role="log" aria-label="Conversation messages" tabindex="0"></div>
 
       <form id="textTurnForm" class="text-turn-form">
+        <label for="textTurnInput" class="visually-hidden">Message</label>
         <input
           id="textTurnInput"
           type="text"
-          placeholder="Speak via mic or type in English, Wallisertiitsch, Deutsch, Français, Español, Čeština, or 中文 (auto-detected)..."
+          placeholder="Type a message in any supported language…"
           autocomplete="off"
         />
-        <button class="btn btn-primary" type="submit">Send &amp; Speak</button>
+        <button class="btn btn-primary" type="submit">
+          <svg class="icon" aria-hidden="true"><use href="#i-send"/></svg>
+          Send
+        </button>
       </form>
     </section>
 
-    <!-- Right Column: Gemini Robotics ER 2 & UniX AI Panther ROS 2 Safety Gateway -->
-    <section class="card robotics-panel">
-      <h2>Gemini Robotics ER 2 &amp; UniX AI Panther ROS 2 Gateway</h2>
-      <p class="muted-text">
-        Connected to UniX AI Panther ROS 2 (<code>ROS_DOMAIN_ID=15</code>, CycloneDDS: <code>/cmd_vel</code>, <code>/head_forward_position_controller/commands</code>, <code>/lifting_controller/commands</code>, <code>/left_gripper/gripper_command</code>, <code>/right_gripper/gripper_command</code>). Orbbec Gemini 2 camera (<code>/camera/color/image_raw</code>) triggers automatically on demand when visual context is needed.
-      </p>
+    <!-- Robotics: Gemini Robotics ER 2 + Panther safety gateway -->
+    <section class="card robotics-panel" aria-labelledby="roboticsTitle">
+      <div class="card-header">
+        <h2 id="roboticsTitle" class="card-title">
+          <svg class="icon" aria-hidden="true"><use href="#i-robot"/></svg>
+          Robot &amp; scene analysis
+        </h2>
+      </div>
+
       <div id="pantherTelemetryBar" class="residency-box">
         ROS 2 Bridge: waiting for connection on <code>/ws/robot-bridge</code> · Domain ID 15
       </div>
 
+      <details class="topics">
+        <summary>ROS 2 topics used</summary>
+        <p>
+          Connected to UniX AI Panther ROS 2 (<code>ROS_DOMAIN_ID=15</code>, CycloneDDS: <code>/cmd_vel</code>, <code>/master_controller/joint_trajectory</code>, <code>/head_forward_position_controller/commands</code>, <code>/lifting_controller/commands</code>, <code>/left_gripper/gripper_command</code>, <code>/right_gripper/gripper_command</code>). Orbbec Gemini 2 camera (<code>/camera/color/image_raw</code>) triggers automatically on demand when visual context is needed.
+        </p>
+      </details>
+
       <form id="er2Form" class="er2-form">
-        <label>
-          Workspace Camera Frame (Optional — leave empty to auto-trigger Panther <code>/camera/color/image_raw</code>)
-          <input id="er2ImageInput" type="file" accept="image/jpeg,image/png,image/webp" />
-        </label>
-        <canvas id="er2Canvas" class="er2-canvas hidden" width="480" height="300"></canvas>
-        <label>
-          Task / Spatial Instruction
+        <label for="er2Instruction">
+          Task or spatial instruction
           <input
             id="er2Instruction"
             type="text"
@@ -113,48 +157,77 @@
             required
           />
         </label>
+        <label for="er2ImageInput">
+          Workspace image <span class="field-hint">Optional. Leave empty to use the robot camera.</span>
+          <input id="er2ImageInput" type="file" accept="image/jpeg,image/png,image/webp" />
+        </label>
+        <canvas id="er2Canvas" class="er2-canvas hidden" width="480" height="300" role="img"
+                aria-label="Analysed workspace image with detected objects"></canvas>
         <div class="confirm-actions">
-          <button class="btn btn-primary" type="submit">Analyze Scene (ER 2)</button>
-          <button id="captureCameraBtn" class="btn btn-secondary" type="button">Trigger Robot Camera</button>
+          <button class="btn btn-primary" type="submit">
+            <svg class="icon" aria-hidden="true"><use href="#i-scan"/></svg>
+            Analyze scene
+          </button>
+          <button id="captureCameraBtn" class="btn btn-secondary" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
+            Take robot photo
+          </button>
         </div>
       </form>
 
-      <div id="er2Output" class="er2-output"></div>
+      <div id="er2Output" class="er2-output" role="status"></div>
 
-      <h3>Pending Human Confirmations</h3>
-      <div id="confirmationsList" class="confirmations-list">
+      <h3 class="section-title" id="confirmTitle">Waiting for your confirmation</h3>
+      <div id="confirmationsList" class="confirmations-list" aria-labelledby="confirmTitle" aria-live="polite">
         <p class="muted-text">No pending robot commands.</p>
       </div>
 
       <div id="residencyFooter" class="residency-box"></div>
     </section>
 
-    <!-- Full width: live robot camera next to the simulation view (both read-only) -->
+    <!-- Live robot camera next to the simulation view (both read-only) -->
     <section class="card live-panel" aria-label="Live robot camera and simulation">
       <div class="live-pane">
-        <div class="live-pane-head">
-          <h2>Robot Camera</h2>
-          <button id="cameraLiveToggle" class="btn btn-primary" type="button">▶ Start live camera</button>
+        <div class="card-header">
+          <h2 class="card-title">
+            <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
+            Robot camera
+          </h2>
+          <button id="cameraLiveToggle" class="btn btn-primary" type="button" aria-pressed="false" aria-controls="cameraFeed">
+            <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
+            <span class="btn-label">Start live camera</span>
+          </button>
         </div>
         <div class="live-frame">
-          <img id="cameraFeed" class="live-media hidden" alt="Live Panther camera frame" />
-          <p id="cameraPlaceholder" class="muted-text live-placeholder">No camera frame yet.</p>
+          <img id="cameraFeed" class="live-media hidden" alt="Live view from the robot's camera" />
+          <p id="cameraPlaceholder" class="live-placeholder">
+            <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
+            No camera frame yet.
+          </p>
         </div>
         <p id="cameraStatus" class="muted-text live-status"></p>
       </div>
 
       <div class="live-pane">
-        <div class="live-pane-head">
-          <h2>Simulation</h2>
+        <div class="card-header">
+          <h2 class="card-title">
+            <svg class="icon" aria-hidden="true"><use href="#i-cube"/></svg>
+            Simulation
+          </h2>
           <div class="live-pane-tools">
-            <label class="inline-check"><input id="simDemoToggle" type="checkbox" /> Demo</label>
-            <button id="simResetView" class="btn btn-ghost" type="button">Reset view</button>
+            <label class="inline-check" for="simDemoToggle"><input id="simDemoToggle" type="checkbox" /> Demo</label>
+            <button id="simResetView" class="btn btn-ghost" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg>
+              Reset view
+            </button>
           </div>
         </div>
         <div class="live-frame">
-          <canvas id="simCanvas" class="live-media sim-canvas" title="Drag to rotate, scroll to zoom"></canvas>
+          <canvas id="simCanvas" class="live-media sim-canvas" tabindex="0" role="img"
+                  aria-label="3D view of the robot's pose" aria-describedby="simHelp"></canvas>
         </div>
         <p id="simStatus" class="muted-text live-status"></p>
+        <p id="simHelp" class="muted-text">Drag or use the arrow keys to rotate, scroll or + and − to zoom.</p>
       </div>
     </section>
   </main>
