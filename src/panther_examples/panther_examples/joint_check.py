@@ -25,7 +25,7 @@ from unix_msgs.msg import GripperCommand
 from panther_examples.robot import (
     FORWARD, HEAD, HEAD_FORWARD, LEFT_ARM, LEFT_GRIPPER_CMD_TOPIC, LEFT_GRIPPER_STATE_TOPIC, LEFT_TRAJ, LIFT_CMD_TOPIC,
     LIFT_STATE_TOPIC, LIFT_VEL, MAX_LIFT, MIN_LIFT, RIGHT_ARM, RIGHT_GRIPPER_CMD_TOPIC, RIGHT_GRIPPER_STATE_TOPIC,
-    RIGHT_TRAJ,
+    RIGHT_TRAJ, single_position,
 )
 
 ARM_VEL = 0.2  # rad/s for the step, under cartesian_follow's 0.5 default
@@ -63,8 +63,9 @@ class Check:
         self.pos.update(zip(msg.name, msg.position))
 
     def on_single(self, name, msg):  # gripper and lift state topics carry one unnamed position
-        if msg.position:
-            self.pos[name] = msg.position[0]
+        p = single_position(msg)
+        if p is not None:
+            self.pos[name] = p
 
     def spin_until(self, done, timeout):
         end = time.monotonic() + timeout

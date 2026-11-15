@@ -2,11 +2,12 @@
 Always runs on ROS_DOMAIN_ID 77, localhost only, whatever the terminal is set to.
 
 ros2 launch panther_sim mock_sim.launch.py
-  urdf:=<path>    full URDF captured from the robot (default: the stripped one from PR #521)
-  meshes:=<dir>   local copy of the robot's /opt/ros/humble/share/mh3_description
+  urdf:=<path>    robot URDF (default: urdf/robot_description.urdf, the robot's /robot_description)
+  meshes:=<dir>   local copy of the robot's mh3_description share directory; without it, stand-in shapes
 """
 import math
 import os
+import re
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
@@ -32,7 +33,8 @@ SIM_DOMAIN = "77"
 # Loopback only, multicast forced on (lo has none by default). ROS_LOCALHOST_ONLY=1 instead caps Cyclone at a few
 # participants on Humble, and the sim has about ten. Same string as docker/run.sh --sim.
 SIM_CYCLONE = '<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/></Interfaces></General></Domain></CycloneDDS>'
-VENDOR_MESHES ="file:///opt/ros/humble/share/mh3_description"
+# The robot has published mesh paths from both /opt/ros/humble/share and its workspace install.
+VENDOR_MESHES = r"file://[^\"]*/share/mh3_description"
 
 
 def _visual(link, geometry, xyz="0 0 0", rpy="0 0 0", rgba="0.75 0.75 0.78 1"):
@@ -68,15 +70,19 @@ def robot_description(urdf_path, mesh_dir):
     for tag in ("ros2_control", "gazebo"):  # vendor blocks load CAN hardware plugins that only exist on the robot
         for e in root.findall(tag):
             root.remove(e)
+    if not mesh_dir:  # the vendor meshes are only on the robot: drop them so the stand-in shapes are drawn
+        for link in root.findall("link"):
+            for v in link.findall("visual") + link.findall("collision"):  # RViz loads collision meshes too
+                link.remove(v)
     for j in root.findall("joint"):
         lim = j.find("limit")
         if j.get("name") in ARM_HEAD and lim is not None and float(lim.get("velocity", "0")) == 0:
             lim.set("velocity", SIM_ARM_VEL)
     by_name = {j.get("name"): j for j in root.findall("joint")}
-    if by_name["body_joint"].get("type") == "fixed":
+    lift = by_name["body_joint"]
+    if lift.find("axis").get("xyz") == "0 0 -1":
         # The vendor joint (axis 0 0 -1, limit 0-0.6) has the direction wrong: 0 is the bottom, so the axis goes
         # up and the origin drops by the full travel to put the vendor height at the top.
-        lift = by_name["body_joint"]
         lift.set("type", "prismatic")
         lift.find("axis").set("xyz", "0 0 1")
         lift.find("limit").attrib.update(lower="0", upper=str(LIFT_TOP), velocity=str(r.LIFT_VEL))
@@ -111,7 +117,7 @@ def robot_description(urdf_path, mesh_dir):
                                   '<plugin>mock_components/GenericSystem</plugin></hardware>' + joints + "</ros2_control>"))
     xml = ET.tostring(root, encoding="unicode")
     if mesh_dir:
-        xml = xml.replace(VENDOR_MESHES, "file://" + os.path.abspath(os.path.expanduser(mesh_dir)))
+        xml = re.sub(VENDOR_MESHES, "file://" + os.path.abspath(os.path.expanduser(mesh_dir)), xml)
     return xml
 
 
@@ -144,7 +150,7 @@ def generate_launch_description():
         # controller names, so on the robot's domain rqt could command the real arms.
         SetEnvironmentVariable("ROS_DOMAIN_ID", SIM_DOMAIN),
         SetEnvironmentVariable("CYCLONEDDS_URI", SIM_CYCLONE),  # replaces a robot setup's NIC pinning
-        DeclareLaunchArgument("urdf", default_value=os.path.join(SHARE, "urdf", "panther.urdf")),
+        DeclareLaunchArgument("urdf", default_value=os.path.join(SHARE, "urdf", "robot_description.urdf")),
         DeclareLaunchArgument("meshes", default_value=""),
         OpaqueFunction(function=nodes),
     ])

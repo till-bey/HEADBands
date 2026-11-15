@@ -53,6 +53,7 @@ from panther_examples.robot import (
     RIGHT_HARDWARE,
     RIGHT_TRAJ,
     can_service,
+    single_position,
 )
 
 SERVICE_TIMEOUT_SEC = 20.0
@@ -289,8 +290,8 @@ def step_adjust_height(node, step_size=0.05):
     current_height = [0.2]  # fallback estimate
 
     def on_lift_state(msg):
-        if msg.position:
-            current_height[0] = float(msg.position[0])
+        if (p := single_position(msg)) is not None:
+            current_height[0] = p
 
     sub = node.create_subscription(JointState, LIFT_STATE_TOPIC, on_lift_state, 10)
     for _ in range(10):
@@ -356,16 +357,16 @@ def step_record(node, seconds):
         latest_arm["msg"] = msg
 
     def on_left_gripper(msg):
-        if msg.position:
-            latest_left_gripper["pos"] = float(msg.position[0])
+        if (p := single_position(msg)) is not None:
+            latest_left_gripper["pos"] = p
 
     def on_right_gripper(msg):
-        if msg.position:
-            latest_right_gripper["pos"] = float(msg.position[0])
+        if (p := single_position(msg)) is not None:
+            latest_right_gripper["pos"] = p
 
     def on_lift_state(msg):
-        if msg.position:
-            latest_lift["height"] = float(msg.position[0])
+        if (p := single_position(msg)) is not None:
+            latest_lift["height"] = p
 
     node.create_subscription(JointState, "/joint_states", on_arm_state, 10)
     node.create_subscription(JointState, LEFT_GRIPPER_STATE_TOPIC, on_left_gripper, 10)

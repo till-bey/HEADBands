@@ -89,25 +89,27 @@ ros2 action send_goal /left_arm_joint_trajectory_position_controller/follow_join
 
 ## Robot model
 
-[`urdf/panther.urdf`](urdf/panther.urdf) is the stripped vendor URDF from 4paradigm/phanthymotus-driver PR #521 (`unixai/panther/resource/panther.urdf`, identical in #520). It has no meshes, so the launch file draws stand-in geometry: a box base, wheels, a torso column, rods for links, and orange spheres at the moving joints. Kinematics are the vendor's; the shapes are not.
+[`urdf/robot_description.urdf`](urdf/robot_description.urdf) is the robot's own `/robot_description` (xacro output of `mh3_description`). The sim, `cartesian_follow.py`'s IK on the robot, and the `motion/` scripts all use these kinematics. On the robot, `cartesian_follow.py` reads the live `/robot_description` instead.
 
-The real meshes are only on the robot, in the `mh3_description` package; they are not public. To use them, connect to the robot. Then:
+The meshes are only on the robot, in the `mh3_description` package; they are not public. Without them the launch file draws stand-in geometry: a box base, wheels, a torso column, rods for links, and orange spheres at the moving joints. To use the real meshes, copy them from the robot:
 
 ```bash
-# 1. the full URDF the robot publishes (run in your robot terminal)
+scp -r <user>@<robot>:/home/unix_ai/unixai_ws/install/mh3_description/share/mh3_description ~/mh3_description
+ros2 launch panther_sim mock_sim.launch.py meshes:=$HOME/mh3_description
+```
+
+To refresh the URDF after a robot update, save its `/robot_description` over the file (run in your robot terminal):
+
+```bash
 python3 -c "
 import rclpy; from std_msgs.msg import String; from rclpy.qos import QoSProfile, DurabilityPolicy
 rclpy.init(); n = rclpy.create_node('grab')
-def cb(m): open('mh3_full.urdf', 'w').write(m.data); raise SystemExit
+def cb(m): open('src/panther_sim/urdf/robot_description.urdf', 'w').write(m.data); raise SystemExit
 n.create_subscription(String, '/robot_description', cb, QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 rclpy.spin(n)"
-# 2. the meshes
-scp -r <user>@<robot>:/opt/ros/humble/share/mh3_description ~/mh3_description
-# 3. launch with both
-ros2 launch panther_sim mock_sim.launch.py urdf:=$PWD/mh3_full.urdf meshes:=$HOME/mh3_description
 ```
 
-The launch file removes the vendor `<ros2_control>` and `<gazebo>` blocks, because they load CAN plugins that only exist on the robot. It also points the `file:///opt/ros/humble/share/mh3_description` mesh paths at `meshes:=`.
+The launch file removes the vendor `<ros2_control>` and `<gazebo>` blocks, because they load CAN plugins that only exist on the robot. It also points the vendor `file://.../share/mh3_description` mesh paths at `meshes:=`, and flips the lift axis so 0 is the bottom.
 
 The vendor URDF has the lift and grippers fixed, and `ros2_control` rejects fixed joints, so the launch file changes the sim copy:
 

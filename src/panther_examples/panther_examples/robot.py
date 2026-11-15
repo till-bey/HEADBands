@@ -33,3 +33,9 @@ LIFT_VEL = 0.05  # m/s, SDK limit
 def can_service(joint, verb):
     """CANopen Trigger service of an arm joint, e.g. /can0/joint_la0/enable."""
     return f"/{'can0' if joint.startswith('joint_la') else 'can1'}/{joint}/{verb}"
+
+
+def single_position(msg):
+    """The one position on a gripper or lift state topic, or None when the message has no reading.
+    About half the robot's gripper messages carry -32.767 (int16 -32767 / 1000); real values are 0..1 and 0..0.8 m."""
+    return float(msg.position[0]) if msg.position and msg.position[0] > -1.0 else None

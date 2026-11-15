@@ -7,6 +7,7 @@ Robot scripts. Run them in the container (`docker/run.sh`, or `docker/run.sh --s
 | `ros2 run panther_examples joint_check [--yes]` | Moves every joint (arms, head, grippers, lift) a small step and back, checks the measured position follows. Without `--yes` it prints the plan only |
 | `ros2 run panther_examples teach ...` | Record both arms and grippers moved by hand, adjust the lift, play back. Steps in the [script docstring](panther_examples/teach.py) |
 | `ros2 run panther_examples cartesian_follow ...` | Cartesian path for one arm, IK with PyKDL (below) |
+| `ros2 run panther_examples master_controller` | One `JointTrajectory` topic, `/master_controller/joint_trajectory`, for both arms, head, lift and grippers in any mix; split onto each robot controller. Usage in the [script docstring](panther_examples/master_controller.py) |
 | `ros2 run panther_examples commands` | Scratchpad of single commands (gripper, base, head, dual arm); edit `main()` |
 
 # Cartesian trajectory following (PyKDL)

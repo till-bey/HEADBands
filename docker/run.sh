@@ -50,6 +50,12 @@ if [[ -t 0 && -t 1 ]]; then
   tty_args=(-it)
 fi
 
+# The robot's /robot_description loads meshes from its own install path: mount a local copy there for RViz.
+mesh_args=()
+if [[ -d "${HOME}/mh3_description" ]]; then
+  mesh_args=(-v "${HOME}/mh3_description:/home/unix_ai/unixai_ws/install/mh3_description/share/mh3_description:ro")
+fi
+
 exec docker run --rm \
   "${tty_args[@]}" \
   --network host \
@@ -58,6 +64,7 @@ exec docker run --rm \
   -e DISPLAY="${DISPLAY:-:0}" \
   -v "${ROOT}:/workspace" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  "${mesh_args[@]}" \
   -w /workspace \
   "${IMAGE}" \
   "$@"

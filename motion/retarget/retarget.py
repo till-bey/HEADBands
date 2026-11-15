@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples"))
 from panther_examples.cartesian_follow import Chain, spline_peak, timed  # noqa: E402
 
-URDF = os.path.join(HERE, "..", "..", "src", "panther_sim", "urdf", "panther.urdf")
+URDF = os.path.join(HERE, "..", "..", "src", "panther_sim", "urdf", "robot_description.urdf")
 # Recording axes -> body_link axes (x forward, y left, z up). The recording is believed to be the same, but not
 # certain: if the arm moves rotated or mirrored compared to visualize.py, fix this matrix.
 TO_BODY = np.eye(3)

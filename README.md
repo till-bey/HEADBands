@@ -14,12 +14,31 @@ Teaching the UniX AI Panther to throw a frisbee. Everything ROS is Humble, like 
 
 ## Quick start
 
+GUI apps in the container (RViz, Gazebo) need X access. Run once per login on the host:
+
+```bash
+xhost +local:                       # the trailing colon matters
+```
+
 Robot, on the Ethernet cable:
 
 ```bash
 docker/run.sh                       # Humble shell, domain 15, Cyclone pinned to the cable
 colcon build && source install/setup.bash
 ros2 run panther_examples joint_check          # plan only; add --yes to move each joint a step and back
+ros2 launch panther_sim robot_rviz.launch.py   # RViz of the robot's arms and head, stand-in shapes, lift and wheels fixed
+
+# rqt on the arms (with robot_rviz running: the robot's URDF has arm velocity 0, which crashes rqt)
+ros2 control switch_controllers --activate left_arm_joint_trajectory_position_controller right_arm_joint_trajectory_position_controller --deactivate dual_arm_forward_position_controller
+ros2 run rqt_joint_trajectory_controller rqt_joint_trajectory_controller --ros-args -r /robot_description:=/panther_standin/robot_description
+ros2 control switch_controllers --activate dual_arm_forward_position_controller --deactivate left_arm_joint_trajectory_position_controller right_arm_joint_trajectory_position_controller   # when done
+```
+
+For the real meshes instead, copy them from the robot once (`docker/run.sh` mounts `~/mh3_description` where the robot's URDF expects it), then use plain RViz:
+
+```bash
+scp -r unix_ai@192.168.100.3:/home/unix_ai/unixai_ws/install/mh3_description/share/mh3_description ~/mh3_description
+rviz2 -d src/panther_sim/config/panther.rviz -f body_link   # in the robot terminal
 ```
 
 Mock sim, no robot (domain 77, localhost only, so it can never command the robot):

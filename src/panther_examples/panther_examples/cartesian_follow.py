@@ -9,6 +9,11 @@ dual_arm_forward_position_controller off for the move, back on afterwards.
   ros2 run panther_examples cartesian_follow --arm left --path motion/example_path.csv --dry-run  # plan + check only
   ros2 run panther_examples cartesian_follow --arm right --joints FILE.csv --dry-run              # joint angles given: no IK
 
+--joints rows: t,q0..q7 in the controller's joint order, optionally a last column: where the gripper is at that time
+(1 closed, 0 open). Wherever it changes between two rows, the next value is sent on the arm's gripper topic at the
+first row's time, with the speed (strokes/s) that gets it there by the second; the first row's value is sent at 1.0.
+--pause S: once at the first row, wait S s, send the first gripper value, wait S s more, then run the rest.
+
 CSV rows: t,x,y,z,roll,pitch,yaw (s, m, rad), the gripper frame (link_lf / link_rf) in body_link.
 body_link is used because the lift moves it on the robot while the URDF has the lift fixed.
 """
@@ -31,7 +36,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-from panther_examples.robot import FORWARD, LEFT_TRAJ, RIGHT_TRAJ
+from panther_examples.robot import FORWARD, LEFT_GRIPPER_CMD_TOPIC, LEFT_TRAJ, RIGHT_GRIPPER_CMD_TOPIC, RIGHT_TRAJ
 
 MAX_JOINT_VEL = 0.5  # rad/s, our choice; no vendor limit (PR #521 averages 0.35 rad/s on the robot)
 BASE = "body_link"
@@ -59,9 +64,10 @@ class Chain:
             xyz = [float(v) for v in (o.get("xyz", "0 0 0") if o is not None else "0 0 0").split()]
             rpy = [float(v) for v in (o.get("rpy", "0 0 0") if o is not None else "0 0 0").split()]
             origin = kdl.Frame(kdl.Rotation.RPY(*rpy), kdl.Vector(*xyz))
-            if j.get("type") == "revolute":
+            if j.get("type") in ("revolute", "prismatic"):  # prismatic: the lift, base_footprint to body_link
                 axis = kdl.Vector(*[float(v) for v in j.find("axis").get("xyz").split()])
-                joint = kdl.Joint(j.get("name"), origin.p, origin.M * axis, kdl.Joint.RotAxis)
+                kind = kdl.Joint.RotAxis if j.get("type") == "revolute" else kdl.Joint.TransAxis
+                joint = kdl.Joint(j.get("name"), origin.p, origin.M * axis, kind)
                 self.names.append(j.get("name"))
                 lo.append(float(j.find("limit").get("lower")))
                 hi.append(float(j.find("limit").get("upper")))
@@ -181,20 +187,22 @@ def load_csv(path):
 
 
 def load_joints(path, chain):
-    """Rows t,q... in chain.names order (no IK). Raises RuntimeError if a joint is outside its limits."""
+    """(qs, ts, gripper or None) from rows t,q... in chain.names order (no IK), optionally a gripper column.
+    Raises RuntimeError if a joint is outside its limits."""
     try:
         rows = np.loadtxt(path, delimiter=",", ndmin=2, comments="#")
     except ValueError as e:
         raise SystemExit(f"{path}: not a t,{','.join(chain.names)} file (header lines must start with #): {e}")
-    if rows.shape[1] != 1 + len(chain.names) or np.any(np.diff(rows[:, 0]) <= 0):
-        raise SystemExit(f"{path}: need columns t,{','.join(chain.names)} with t strictly increasing")
-    qs, ts = rows[:, 1:], rows[:, 0]
+    if rows.shape[1] not in (1 + len(chain.names), 2 + len(chain.names)) or np.any(np.diff(rows[:, 0]) <= 0):
+        raise SystemExit(f"{path}: need columns t,{','.join(chain.names)}[,gripper] with t strictly increasing")
+    grip = np.clip(rows[:, -1], 0.0, 1.0) if rows.shape[1] == 2 + len(chain.names) else None
+    qs, ts = rows[:, 1:1 + len(chain.names)], rows[:, 0]
     out = (qs < chain.lo) | (qs > chain.hi)
     if out.any():
         i, k = np.argwhere(out)[0]
         raise RuntimeError(f"{chain.names[k]} = {qs[i, k]:.3f} at t={ts[i]:.2f}s is outside its limits "
                            f"{chain.lo[k]:.3f}..{chain.hi[k]:.3f}")
-    return list(qs), ts
+    return list(qs), ts, grip
 
 
 def main():
@@ -204,8 +212,11 @@ def main():
     src.add_argument("--path", help="hand poses t,x,y,z,roll,pitch,yaw (IK solved here)")
     src.add_argument("--joints", help="arm joint angles t,q0..q7 in the controller's joint order (no IK)")
     ap.add_argument("--max-joint-vel", type=float, default=MAX_JOINT_VEL)
+    ap.add_argument("--pause", type=float, default=0.0,
+                    help="--joints only: s held at the first row before and after the gripper's first command")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    grip = None
     if args.path:
         poses, ts, hint = load_csv(args.path)
 
@@ -214,12 +225,13 @@ def main():
     got = {}
     node.create_subscription(String, "/robot_description", lambda m: got.setdefault("urdf", m.data),
                              QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-    samples = []  # (time, {joint: position}) during the move
+    samples = []  # (robot stamp, laptop receipt time, {joint: position}) during the move
 
     def on_joint_states(m):
         got["js"] = dict(zip(m.name, m.position))
         if got.get("moving"):
-            samples.append((m.header.stamp.sec + m.header.stamp.nanosec * 1e-9, got["js"]))
+            samples.append((m.header.stamp.sec + m.header.stamp.nanosec * 1e-9,
+                            node.get_clock().now().nanoseconds * 1e-9, got["js"]))
     node.create_subscription(JointState, "/joint_states", on_joint_states, 10)
     for _ in range(50):
         if "urdf" in got and "js" in got:
@@ -232,13 +244,24 @@ def main():
     q_now = np.array([got["js"][n] for n in chain.names])
     try:
         if args.joints:
-            qs, ts, vels = timed(chain, *load_joints(args.joints, chain), q_now, args.max_joint_vel)
+            qs, ts, grip = load_joints(args.joints, chain)
+            if args.pause > 0:  # hold the first row for 2 pauses: the zero-length step gives zero speeds there
+                qs, ts = [qs[0]] + qs, np.r_[ts[0], ts + 2 * args.pause]
+                grip = None if grip is None else np.r_[grip[0], grip]
+            qs, ts, vels = timed(chain, qs, ts, q_now, args.max_joint_vel)
         else:
             qs, ts, vels = plan(chain, poses, ts, q_now, args.max_joint_vel, hint)
     except RuntimeError as e:
         sys.exit(f"refused, nothing sent: {e}")
     print(f"planned {len(qs)} points over {ts[-1]:.1f}s (incl. {ts[0]:.1f}s to reach the start), "
           f"within joint limits and {args.max_joint_vel} rad/s")
+    # gripper commands (trajectory time, position, speed): the first row, then each segment where the column changes
+    grips = [] if grip is None else [(ts[0] + args.pause, grip[0], 1.0)] + [
+        (ts[i], grip[i + 1], abs(grip[i + 1] - grip[i]) / (ts[i + 1] - ts[i]))
+        for i in range(len(grip) - 1) if grip[i + 1] != grip[i]]
+    for t, g, v in grips:
+        print(f"gripper to {g:.2f} at t={t:.2f}s, {v:.2f} strokes/s" +
+              (" (above 1.0: untested on the robot)" if v > 1.0 + 1e-9 else ""))
     latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     node.create_publisher(Path, "/cartesian_follow/planned_path", latched).publish(
         path_msg(chain, qs, node.get_clock().now().to_msg()))
@@ -297,6 +320,21 @@ def main():
         if not handle.accepted:
             raise RuntimeError("goal rejected by the controller")
         got["t0"] = node.get_clock().now().nanoseconds * 1e-9  # trajectory time 0, to within a few ms
+        # shortcut: the real gripper's lag and top speed are unmeasured; if it opens late, open earlier in the file.
+        from unix_msgs.msg import GripperCommand  # here: retarget.py imports this module where unix_msgs is absent
+        grip_pub = node.create_publisher(GripperCommand,
+                                         LEFT_GRIPPER_CMD_TOPIC if args.arm == "left" else RIGHT_GRIPPER_CMD_TOPIC, 10)
+
+        def one_shot(t, g, v):
+            def fire():
+                timer.cancel()
+                cmd = GripperCommand()
+                cmd.command.name, cmd.command.position = [""], [float(g)]
+                cmd.command.velocity, cmd.command.effort = [float(v)], [0.5]
+                grip_pub.publish(cmd)
+            timer = node.create_timer(max(t, 1e-3), fire)
+        for t, g, v in grips:
+            one_shot(t, g, v)
         f = handle.get_result_async()
         rclpy.spin_until_future_complete(node, f)
         handle = None
@@ -319,7 +357,9 @@ def report(chain, samples, qs, ts, max_vel, t0):
         print("no /joint_states samples recorded")
         return
     t = np.array([s[0] for s in samples])
-    q = np.array([[s[1][n] for n in chain.names] for s in samples])
+    q = np.array([[s[2][n] for n in chain.names] for s in samples])
+    # Stamps are the robot's clock, t0 the laptop's: shift by the median gap (network delay is a few ms).
+    offset = float(np.median(np.array([s[1] for s in samples]) - t))
     ok = True
     for k, n in enumerate(chain.names):
         out = (q[:, k] < chain.lo[k] - 1e-6) | (q[:, k] > chain.hi[k] + 1e-6)
@@ -336,13 +376,15 @@ def report(chain, samples, qs, ts, max_vel, t0):
     # Hand position vs plan over the Cartesian part only (the move to the start is joint-space).
     pos = lambda x: list(chain.fk(x).p)
     planned = np.array([pos(x) for x in qs])
-    tt = t - (t0 if t0 is not None else t[0])
+    tt = t + offset - (t0 if t0 is not None else t[0] + offset)
     on_path = (tt >= ts[0]) & (tt <= ts[-1])
     actual = np.array([pos(x) for x in q[on_path]])
     want = np.column_stack([np.interp(tt[on_path], ts, planned[:, i]) for i in range(3)])
-    dev = 1000 * np.linalg.norm(actual - want, axis=1).max() if on_path.any() else float("nan")
+    err = 1000 * np.linalg.norm(actual - want, axis=1) if on_path.any() else np.array([np.nan])
+    dev, at = err.max(), tt[on_path][int(np.argmax(err))] if on_path.any() else float("nan")
     print(f"peak joint speed {peak.max():.3f} rad/s ({chain.names[int(peak.argmax())]}), "
-          f"max hand deviation from plan {dev:.1f} mm, {len(samples)} samples")
+          f"max hand deviation from plan {dev:.1f} mm at t={at:.2f}s, {len(samples)} samples, "
+          f"robot clock {-offset:+.3f}s from this machine's")
     print("limits respected" if ok else "LIMITS VIOLATED")
     sys.exit(0 if ok else 2)
 
