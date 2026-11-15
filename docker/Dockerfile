@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-teleop-twist-keyboard \
         ros-humble-ros2-control \
         ros-humble-ros2-controllers \
+        ros-humble-rqt-joint-trajectory-controller \
+        python3-pykdl \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ROS_DOMAIN_ID=15
