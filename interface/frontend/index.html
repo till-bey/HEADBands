@@ -128,8 +128,39 @@
 
       <div id="residencyFooter" class="residency-box"></div>
     </section>
+
+    <!-- Full width: live robot camera next to the simulation view (both read-only) -->
+    <section class="card live-panel" aria-label="Live robot camera and simulation">
+      <div class="live-pane">
+        <div class="live-pane-head">
+          <h2>Robot Camera</h2>
+          <button id="cameraLiveToggle" class="btn btn-primary" type="button">▶ Start live camera</button>
+        </div>
+        <div class="live-frame">
+          <img id="cameraFeed" class="live-media hidden" alt="Live Panther camera frame" />
+          <p id="cameraPlaceholder" class="muted-text live-placeholder">No camera frame yet.</p>
+        </div>
+        <p id="cameraStatus" class="muted-text live-status"></p>
+      </div>
+
+      <div class="live-pane">
+        <div class="live-pane-head">
+          <h2>Simulation</h2>
+          <div class="live-pane-tools">
+            <label class="inline-check"><input id="simDemoToggle" type="checkbox" /> Demo</label>
+            <button id="simResetView" class="btn btn-ghost" type="button">Reset view</button>
+          </div>
+        </div>
+        <div class="live-frame">
+          <canvas id="simCanvas" class="live-media sim-canvas" title="Drag to rotate, scroll to zoom"></canvas>
+        </div>
+        <p id="simStatus" class="muted-text live-status"></p>
+      </div>
+    </section>
   </main>
 
   <script src="/assets/app.js" defer></script>
+  <script src="/assets/live_camera.js" defer></script>
+  <script src="/assets/robot_view.js" defer></script>
 </body>
 </html>

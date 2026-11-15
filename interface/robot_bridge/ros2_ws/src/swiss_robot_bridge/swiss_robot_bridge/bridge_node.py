@@ -95,6 +95,11 @@ class ROS2HardwareAdapter:
         self.right_gripper_pos: float | None = None
         self.head_joints_rad: list[float] | None = None
         self.last_published_topics: list[str] = list(PANTHER_COMMAND_TOPICS)
+        # Every joint position seen on the state topics, for the Web UI simulation view (read-only).
+        # The lift and gripper state topics have no joint names on the robot, so they are stored
+        # under the URDF names body_joint / joint_lf / joint_rf.
+        self.joint_positions: dict[str, float] = {}
+        self.joint_positions_seq: int = 0
 
         os.environ.setdefault("ROS_DOMAIN_ID", str(PANTHER_ROS_DOMAIN_ID))
         os.environ.setdefault("RMW_IMPLEMENTATION", PANTHER_RMW_IMPLEMENTATION)
@@ -282,10 +287,21 @@ class ROS2HardwareAdapter:
                 if triggered:
                     self._supervisor.trigger_local_estop()
 
+    def _record_joints(self, name_to_pos: dict[str, Any]) -> None:
+        for name, value in name_to_pos.items():
+            try:
+                pos = float(value)
+            except (TypeError, ValueError):
+                continue
+            if name and math.isfinite(pos):
+                self.joint_positions[str(name)] = round(pos, 5)
+        self.joint_positions_seq += 1
+
     def _on_joint_states(self, msg: Any) -> None:
         names = list(getattr(msg, "name", []))
         positions = list(getattr(msg, "position", []))
         name_to_pos = dict(zip(names, positions, strict=False))
+        self._record_joints(name_to_pos)
         if "body_joint" in name_to_pos:
             self.lift_height_m = round(float(name_to_pos["body_joint"]), 4)
         if "joint_lf" in name_to_pos:
@@ -302,16 +318,19 @@ class ROS2HardwareAdapter:
         positions = list(getattr(msg, "position", []))
         if positions:
             self.lift_height_m = round(float(positions[0]), 4)
+            self._record_joints({"body_joint": positions[0]})
 
     def _on_left_gripper_state(self, msg: Any) -> None:
         positions = list(getattr(msg, "position", []))
         if positions:
             self.left_gripper_pos = round(float(positions[0]), 3)
+            self._record_joints({"joint_lf": positions[0]})
 
     def _on_right_gripper_state(self, msg: Any) -> None:
         positions = list(getattr(msg, "position", []))
         if positions:
             self.right_gripper_pos = round(float(positions[0]), 3)
+            self._record_joints({"joint_rf": positions[0]})
 
     def _on_front_scan(self, msg: Any) -> None:
         """Compute closest valid front-arc obstacle distance from `/scan` (`link_front_radar`)."""
@@ -530,7 +549,26 @@ async def run_bridge_loop() -> None:
                             )
                             await asyncio.sleep(1.0)
 
+                    async def _joint_state_sender() -> None:
+                        """5 Hz joint positions for the Web UI simulation view; sent only when they change."""
+                        sent_seq = -1
+                        while True:
+                            seq = ros_hw.joint_positions_seq
+                            if ros_hw.joint_positions and seq != sent_seq:
+                                await ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "joint_states",
+                                            "positions": dict(ros_hw.joint_positions),
+                                            "timestamp_utc": datetime.now(tz=UTC).isoformat(),
+                                        }
+                                    )
+                                )
+                                sent_seq = seq
+                            await asyncio.sleep(0.2)
+
                     sender_task = asyncio.create_task(_telemetry_sender())
+                    joint_task = asyncio.create_task(_joint_state_sender())
                     try:
                         async for raw_msg in ws:
                             data = json.loads(raw_msg)
@@ -585,6 +623,7 @@ async def run_bridge_loop() -> None:
                                     logger.error("Local safety gate rejected cloud command: %s", exc)
                     finally:
                         sender_task.cancel()
+                        joint_task.cancel()
             except Exception as exc:  # noqa: BLE001
                 ros_hw.publish_preempt_stop()
                 logger.warning("Cloud connection unavailable (%s); Panther safely halted locally", exc)

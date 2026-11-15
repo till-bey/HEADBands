@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,7 @@ from app.infrastructure.pubsub import TelemetryPubSubPublisher
 from app.robotics.action_schema import (
     AllowedActionType,
     CameraFrameSnapshot,
+    JointStatesSnapshot,
     RobotActionProposal,
     RobotOperationalState,
     RobotStatus,
@@ -46,6 +48,27 @@ class RobotSafetyGateway:
         self._latest_camera_frame: CameraFrameSnapshot | None = None
         self._latest_camera_monotonic: float | None = None
         self._pending_camera_futures: dict[str, asyncio.Future[CameraFrameSnapshot | None]] = {}
+        self._latest_joint_states: JointStatesSnapshot | None = None
+        self._latest_joint_monotonic: float | None = None
+
+    def ingest_joint_states(self, raw_payload: dict[str, Any]) -> JointStatesSnapshot:
+        """Store the bridge's newest joint positions (display only; never fed back to the robot)."""
+        snapshot = JointStatesSnapshot.model_validate(raw_payload)
+        snapshot.positions = {
+            str(name)[:64]: float(value)
+            for name, value in snapshot.positions.items()
+            if name and math.isfinite(float(value))
+        }
+        self._latest_joint_states = snapshot
+        self._latest_joint_monotonic = time.monotonic()
+        return snapshot
+
+    def get_latest_joint_states(self) -> tuple[JointStatesSnapshot | None, float | None]:
+        """Newest joint snapshot and its age in seconds, or (None, None)."""
+        if self._latest_joint_states is None or self._latest_joint_monotonic is None:
+            return None, None
+        age = time.monotonic() - self._latest_joint_monotonic
+        return self._latest_joint_states.model_copy(deep=True), age
 
     def get_status(self) -> RobotStatus:
         """Return live robot status including watchdog freshness check."""

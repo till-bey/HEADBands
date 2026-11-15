@@ -102,6 +102,19 @@ class CameraFrameSnapshot(BaseModel):
     timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
+class JointStatesSnapshot(BaseModel):
+    """Read-only Panther joint positions from the bridge, for the Web UI simulation view.
+
+    Merged from `/joint_states`, `/lifting_controller/joint_states` (as `body_joint`) and the
+    gripper state topics (as `joint_lf` / `joint_rf`). Never used to command the robot.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    positions: dict[str, float] = Field(default_factory=dict, max_length=128)
+    timestamp_utc: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+
+
 class RobotActionProposal(BaseModel):
     """Application-level proposal produced by ER 2 or assistant tools (not yet approved/executed)."""
 

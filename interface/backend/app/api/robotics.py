@@ -16,7 +16,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.container import ServiceContainer, get_container
 from app.core.logging import get_logger
@@ -88,6 +88,22 @@ async def get_latest_robot_camera(
     if frame is None:
         return {"available": False, "frame": None}
     return {"available": True, "frame": frame.model_dump(mode="json")}
+
+
+@router.get("/api/v1/robotics/joints", dependencies=[Depends(require_api_auth)])
+async def get_latest_joint_states(
+    container: Annotated[ServiceContainer, Depends(get_container)],
+) -> dict[str, Any]:
+    """Newest Panther joint positions streamed by the ROS 2 bridge, for the Web UI simulation view."""
+    snapshot, age = container.robot_gateway.get_latest_joint_states()
+    if snapshot is None:
+        return {"available": False, "positions": {}, "age_seconds": None, "timestamp_utc": None}
+    return {
+        "available": True,
+        "positions": snapshot.positions,
+        "age_seconds": round(age, 3) if age is not None else None,
+        "timestamp_utc": snapshot.timestamp_utc.isoformat(),
+    }
 
 
 @router.post("/api/v1/robotics/analyze", dependencies=[Depends(require_api_auth)])
@@ -257,6 +273,12 @@ async def robot_bridge_websocket(websocket: WebSocket) -> None:
                 container.robot_gateway.ingest_camera_frame(msg)
             elif msg_type == "camera_frame_error":
                 container.robot_gateway.ingest_camera_error(msg)
+            elif msg_type == "joint_states":
+                try:
+                    container.robot_gateway.ingest_joint_states(msg)
+                except (ValidationError, TypeError, ValueError) as exc:
+                    # Display-only data: a bad frame must not drop the bridge connection.
+                    logger.warning("Ignored malformed joint_states frame", extra={"error": str(exc)})
     except WebSocketDisconnect:
         pass
     except Exception as exc:
