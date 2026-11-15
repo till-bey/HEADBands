@@ -18,7 +18,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="HEADBands",
-    maintainer_email="headbands@localhost",
+    maintainer_email="headbands@example.com",
     description="Panther arms, head, lift and grippers on ros2_control mock hardware, with the robot's names.",
     license="Apache-2.0",
     entry_points={

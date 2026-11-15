@@ -13,7 +13,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="HEADBands",
-    maintainer_email="headbands@localhost",
+    maintainer_email="headbands@example.com",
     description="Short command publishers for the Panther.",
     license="Apache-2.0",
     entry_points={

@@ -3,7 +3,7 @@
   <name>panther_examples</name>
   <version>0.0.1</version>
   <description>Short command publishers for the Panther.</description>
-  <maintainer email="headbands@localhost">HEADBands</maintainer>
+  <maintainer email="headbands@example.com">HEADBands</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
