@@ -3,13 +3,12 @@
 Arms, head, lift and grippers on `ros2_control` mock hardware (`mock_components/GenericSystem`): commanded position = reported position, no physics, no driving base. Use it to try trajectories before the real robot.
 
 ```bash
-source /opt/ros/jazzy/setup.bash          # or humble
-# once, from the repo root, for the gripper topics: colcon build --packages-select unix_msgs
-source install/setup.bash                 # unix_msgs; without it the gripper topics are off
-ros2 launch docs/ros2/mock-sim/mock_sim.launch.py
+docker/run.sh --sim                       # from the repo root; domain 77, localhost only
+colcon build && source install/setup.bash
+ros2 launch panther_sim mock_sim.launch.py
 ```
 
-One command starts the sim, RViz and rqt. The sim takes the robot's own command topics (see [Controllers](#controllers)), so code written for the robot runs here unchanged.
+One command starts the sim, RViz and rqt. The sim has the robot's own controller names, hardware component names, command topics and CAN enable/disable services (see [Controllers](#controllers)), so the scripts in `panther_examples` (`teach`, `joint_check`, `cartesian_follow`, `commands`) run here unchanged. Open a second `docker/run.sh --sim` terminal for them.
 
 As on the robot, `dual_arm_forward_position_controller` owns both arms at startup, and the arm trajectory controllers are loaded but inactive. rqt lists only active trajectory controllers, so switch one in first (in a terminal set up as below):
 
@@ -18,7 +17,7 @@ ros2 control switch_controllers --deactivate dual_arm_forward_position_controlle
   --activate left_arm_joint_trajectory_position_controller
 ```
 
-In rqt, open the **controller manager ns** dropdown and pick `/controller_manager`. Then open **controller** and pick one; it lists after about 5 s. Press the red power button so it turns green, and drag the sliders. The dropdowns start blank even when they have entries. [`../cartesian/cartesian_follow.py`](../cartesian/README.md) does this switch itself and switches back afterwards.
+In rqt, open the **controller manager ns** dropdown and pick `/controller_manager`. Then open **controller** and pick one; it lists after about 5 s. Press the red power button so it turns green, and drag the sliders. The dropdowns start blank even when they have entries. [`cartesian_follow`](../panther_examples/README.md) does this switch itself and switches back afterwards.
 
 RViz: left-drag rotates, middle-drag pans, scroll zooms (Interact tool).
 
@@ -29,16 +28,16 @@ The launch file forces these for its own nodes, whatever your terminal has:
 | Variable | Sim value | Why |
 | --- | --- | --- |
 | `ROS_DOMAIN_ID` | `77` | The sim uses the robot's controller names. On the robot's domain, rqt could command the real arms. |
-| `ROS_AUTOMATIC_DISCOVERY_RANGE` | `LOCALHOST` | Stays on this machine. |
+| `ROS_LOCALHOST_ONLY` | `1` | Stays on this machine. |
 | `CYCLONEDDS_URI` | unset | Robot setups pin it to the robot's USB-Ethernet NIC. With the cable out, Cyclone cannot discover anything. |
-| `RMW_IMPLEMENTATION` | `rmw_cyclonedds_cpp` | `rqt_joint_trajectory_controller` 4.42 never finds the controller manager under Fast DDS. The robot runs Cyclone too. |
+| `RMW_IMPLEMENTATION` | `rmw_cyclonedds_cpp` | `rqt_joint_trajectory_controller` can miss the controller manager under Fast DDS. The robot runs Cyclone too. |
 
-So a terminal set up for the robot is fine for launching. For CLI commands against the sim, use a terminal with:
+`docker/run.sh --sim` sets the same for every command in that container. Outside Docker, use a Humble terminal with:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
 unset CYCLONEDDS_URI
-export ROS_DOMAIN_ID=77 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ros2 daemon stop    # drop a daemon cached with the robot settings
 ```
 
@@ -52,11 +51,13 @@ The robot's command topics work here, with the robot's message types:
 | `left_arm_joint_trajectory_position_controller` (inactive at start) | same controller | `joint_la0..7` |
 | `right_arm_joint_trajectory_position_controller` (inactive at start) | same controller | `joint_ra0..7` |
 | `head_forward_position_controller` (active at start) | same controller | `joint_head0`, `joint_head1` |
-| `/lifting_controller/commands` (JointState: `position` m, or `velocity` m/s) | `robot_topics.py` → `lifting_joint_trajectory_controller` | `body_joint`, 0 (bottom) to 0.8 m (top), at most 0.05 m/s |
-| `/left_gripper/gripper_command`, `/right_gripper/gripper_command` (`unix_msgs/GripperCommand`) | `robot_topics.py` → `left_` / `right_gripper_joint_trajectory_controller` | `joint_lf` / `joint_rf`, 0 open to 1 closed |
-| `/lifting_controller/joint_states`, `/left_gripper/joint_states`, `/right_gripper/joint_states` | published by `robot_topics.py` | |
+| `lifting_controller`, `/lifting_controller/commands` (JointState: `position` m, or `velocity` m/s) | `robot_topics` → `lifting_controller` (a trajectory controller here) | `body_joint`, 0 (bottom) to 0.8 m (top), at most 0.05 m/s |
+| `left_` / `right_unix_gripper3_controller`, `/left_gripper/gripper_command`, `/right_gripper/gripper_command` (`unix_msgs/GripperCommand`) | `robot_topics` → `left_` / `right_unix_gripper3_controller` (trajectory controllers here) | `joint_lf` / `joint_rf`, 0 open to 1 closed |
+| `/lifting_controller/joint_states`, `/left_gripper/joint_states`, `/right_gripper/joint_states` | published by `robot_topics` | |
+| `/can0/joint_la*/enable\|disable`, `/can1/joint_ra*/enable\|disable` (`std_srvs/Trigger`) | served by `robot_topics`, always succeed | mock hardware has no torque to drop |
+| Hardware components `unix_openarm_left`, `unix_openarm_right`, `raw_can0`, `raw_can1`, `mh3_head`, `mh3_movebase` | one mock system each, same joints as on the robot | `set_hardware_component_state` works |
 
-The robot's lift and gripper controllers are vendor plugins that only exist on the robot. [`robot_topics.py`](robot_topics.py), started by the launch file, takes their topics and forwards each command as a trajectory to a sim-only controller. Its behaviour is a guess where the vendor does not document it:
+The robot's lift and gripper controllers are vendor plugins that only exist on the robot. Here they are trajectory controllers with the same names, and [`robot_topics`](panther_sim/robot_topics.py), started by the launch file, takes the robot's topics and forwards each command to them as a trajectory. Deactivating a gripper controller (as `teach release` does) stops that gripper, as on the robot. Its behaviour is a guess where the vendor does not document it:
 
 - Lift `position`: moves there at 0.05 m/s, or at the command's `velocity` if that is lower.
 - Lift `velocity` alone: moves toward the end stop until the next command. Whether the robot also stops when commands stop arriving is unknown.
@@ -70,7 +71,7 @@ For rqt, which drives only trajectory controllers: the lift and gripper controll
 ros2 control switch_controllers --deactivate head_forward_position_controller --activate head_joint_trajectory_controller
 ```
 
-Examples, as on the robot (from [the interface reference](../UnixAI_Panther_ROS2_Interface_Reference.md)):
+Examples, as on the robot (from [the interface reference](../../docs/ros2/UnixAI_Panther_ROS2_Interface_Reference.md)):
 
 ```bash
 ros2 topic pub --once /lifting_controller/commands sensor_msgs/msg/JointState "{name: [''], position: [0.5]}"
@@ -89,7 +90,7 @@ ros2 action send_goal /left_arm_joint_trajectory_position_controller/follow_join
 
 ## Robot model
 
-`panther.urdf` is the stripped vendor URDF from 4paradigm/phanthymotus-driver PR #521 (`unixai/panther/resource/panther.urdf`, identical in #520). It has no meshes, so the launch file draws stand-in geometry: a box base, wheels, a torso column, rods for links, and orange spheres at the moving joints. Kinematics are the vendor's; the shapes are not.
+[`urdf/panther.urdf`](urdf/panther.urdf) is the stripped vendor URDF from 4paradigm/phanthymotus-driver PR #521 (`unixai/panther/resource/panther.urdf`, identical in #520). It has no meshes, so the launch file draws stand-in geometry: a box base, wheels, a torso column, rods for links, and orange spheres at the moving joints. Kinematics are the vendor's; the shapes are not.
 
 The real meshes are only on the robot, in the `mh3_description` package; they are not public. To use them, connect to the robot. Then:
 
@@ -104,7 +105,7 @@ rclpy.spin(n)"
 # 2. the meshes
 scp -r <user>@<robot>:/opt/ros/humble/share/mh3_description ~/mh3_description
 # 3. launch with both
-ros2 launch docs/ros2/mock-sim/mock_sim.launch.py urdf:=$PWD/mh3_full.urdf meshes:=$HOME/mh3_description
+ros2 launch panther_sim mock_sim.launch.py urdf:=$PWD/mh3_full.urdf meshes:=$HOME/mh3_description
 ```
 
 The launch file removes the vendor `<ros2_control>` and `<gazebo>` blocks, because they load CAN plugins that only exist on the robot. It also points the `file:///opt/ros/humble/share/mh3_description` mesh paths at `meshes:=`.
