@@ -26,6 +26,7 @@ class AllowedActionType(StrEnum):
     MOVE_TO = "move_to"
     ROTATE = "rotate"
     LOOK_AT = "look_at"
+    MOVE_HEAD = "move_head"
     INSPECT_OBJECT = "inspect_object"
     PICK_OBJECT = "pick_object"
     PLACE_OBJECT = "place_object"
@@ -68,10 +69,10 @@ class GestureTrajectory(BaseModel):
     description: str = Field(default="", max_length=200)
     summary: str = Field(default="", max_length=240)
     arms: list[str] = Field(default_factory=list, max_length=2)
-    joint_names: list[str] = Field(max_length=16)
+    joint_names: list[str] = Field(max_length=18)  # up to both arms + joint_head0/1
     points: list[GestureTrajectoryPoint] = Field(max_length=600)
-    start_positions: list[float] = Field(default_factory=list, max_length=16)
-    keyframes: list[dict] = Field(default_factory=list, max_length=16)
+    start_positions: list[float] = Field(default_factory=list, max_length=18)
+    keyframes: list[dict] = Field(default_factory=list, max_length=32)
     duration_s: float
     peak_joint_vel_rps: float
     min_clearance_m: float | None = None
@@ -163,6 +164,12 @@ class RobotActionProposal(BaseModel):
     speed: float = Field(default=0.15, description="Requested linear speed in m/s.")
     requires_confirmation: bool = True
     rationale: str = Field(default="", max_length=600)
+    head_pitch_rad: float | None = Field(
+        default=None, description="move_head/look_at only: head pitch, + looks down, - looks up (rad)."
+    )
+    head_yaw_rad: float | None = Field(
+        default=None, description="move_head/look_at only: head yaw, + looks left, - looks right (rad)."
+    )
 
 
 class ValidatedRobotCommand(BaseModel):
@@ -182,6 +189,8 @@ class ValidatedRobotCommand(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     expires_at: datetime
     rationale: str = ""
+    head_pitch_rad: float | None = None
+    head_yaw_rad: float | None = None
     gesture: GestureTrajectory | None = None
 
 

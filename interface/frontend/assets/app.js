@@ -133,6 +133,12 @@
       if (c.object_label) {
         details.push(`object="${c.object_label}"`);
       }
+      if (c.head_yaw_rad !== null && c.head_yaw_rad !== undefined) {
+        details.push(`head yaw=${Math.round((Number(c.head_yaw_rad) * 180) / Math.PI)}°`);
+      }
+      if (c.head_pitch_rad !== null && c.head_pitch_rad !== undefined) {
+        details.push(`head pitch=${Math.round((Number(c.head_pitch_rad) * 180) / Math.PI)}°`);
+      }
       const prefix = idx !== null ? `${idx + 1}. ` : "";
       const detailStr = details.length > 0 ? ` (${details.join(", ")})` : "";
       return `${prefix}${c.action}${detailStr}`;
@@ -395,7 +401,9 @@
   const gestureInput = document.getElementById("gestureInput");
 
   function describeGesture(g) {
-    const parts = [`${Number(g.duration_s).toFixed(1)} s`, `${(g.arms || []).join(" + ")} arm`];
+    const movers = (g.arms || []).map((a) => `${a} arm`);
+    if ((g.joint_names || []).includes("joint_head0")) movers.push("head");
+    const parts = [`${Number(g.duration_s).toFixed(1)} s`, movers.join(" + ")];
     parts.push(`peak ${Number(g.peak_joint_vel_rps).toFixed(2)} rad/s`);
     if (g.min_clearance_m !== null && g.min_clearance_m !== undefined) {
       parts.push(`closest to body ${(Number(g.min_clearance_m) * 100).toFixed(0)} cm`);

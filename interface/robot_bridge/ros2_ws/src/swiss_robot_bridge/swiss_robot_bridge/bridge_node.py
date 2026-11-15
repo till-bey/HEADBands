@@ -22,6 +22,8 @@ from swiss_robot_bridge.local_safety import (
     retime_from_current_pose,
 )
 from swiss_robot_bridge.panther_topics import (
+    HEAD_JOINTS,
+    HEAD_MAX_VEL_RPS,
     PANTHER_COMMAND_TOPICS,
     PANTHER_RMW_IMPLEMENTATION,
     PANTHER_ROS_DOMAIN_ID,
@@ -427,6 +429,66 @@ class ROS2HardwareAdapter:
             msg.data = [float(head0_rad), float(head1_rad)]
             self._head_pub.publish(msg)
 
+    def _master_listening(self) -> bool:
+        if self._master_traj_pub is None or self._node is None:
+            return False
+        try:
+            return int(self._node.count_subscribers(TOPIC_MASTER_TRAJ)) > 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    def publish_head_targets(
+        self,
+        targets: dict[str, float],
+        fallback_positions: tuple[float, float] | None = None,
+    ) -> None:
+        """Move only the named head joints, smoothly.
+
+        With master_controller running, send a 10 Hz eased trajectory capped at HEAD_MAX_VEL_RPS,
+        addressed by joint name (master_controller steps head points at their times). Without it,
+        fall back to one direct command on the head forward controller, as before.
+        """
+        current = {
+            HEAD_JOINTS[i]: float(self.joint_positions.get(HEAD_JOINTS[i], (self.head_joints_rad or [0.0, 0.0])[i]))
+            for i in range(2)
+        }
+        final = {**current, **{k: float(v) for k, v in targets.items()}}
+        if self.sim_mode:
+            self._record_joints(final)
+        self.head_joints_rad = [round(final[HEAD_JOINTS[0]], 4), round(final[HEAD_JOINTS[1]], 4)]
+
+        if self._master_listening() and self._joint_traj_cls is not None:
+            names = [j for j in HEAD_JOINTS if j in targets]
+            gap = max(abs(final[j] - current[j]) for j in names)
+            duration = max(0.3, (gap / HEAD_MAX_VEL_RPS) * 1.6)  # eased profile peaks ~1.6x the mean speed
+            steps = max(1, int(math.ceil(duration / 0.1)))
+            msg = self._joint_traj_cls()
+            msg.joint_names = names
+            for k in range(1, steps + 1):
+                s = k / steps
+                a = 0.5 - 0.5 * math.cos(math.pi * s)
+                pt = self._joint_traj_point_cls()
+                t = s * duration
+                pt.time_from_start.sec = int(t)
+                pt.time_from_start.nanosec = int(round((t - int(t)) * 1e9)) % 1_000_000_000
+                pt.positions = [current[j] + a * (final[j] - current[j]) for j in names]
+                msg.points.append(pt)
+            self._master_traj_pub.publish(msg)
+            return
+
+        if fallback_positions is None:
+            ordered = (
+                (final[HEAD_JOINTS[1]], final[HEAD_JOINTS[0]])
+                if self._supervisor.head_order == "yaw_pitch"
+                else (final[HEAD_JOINTS[0]], final[HEAD_JOINTS[1]])
+            )
+        else:
+            ordered = fallback_positions
+        if self._head_pub is not None and self._f64_multi_cls is not None:
+            msg = self._f64_multi_cls()
+            msg.data = [float(ordered[0]), float(ordered[1])]
+            self._head_pub.publish(msg)
+
     def publish_lift(self, z_m: float, velocity_mps: float) -> None:
         self.lift_height_m = round(float(z_m), 4)
         if self._lift_pub is not None and self._joint_state_cls is not None:
@@ -512,7 +574,9 @@ class ROS2HardwareAdapter:
         if plan.enable_ultrasonics:
             self.ensure_ultrasonics_enabled()
 
-        if plan.head_positions is not None:
+        if plan.head_targets:
+            self.publish_head_targets(plan.head_targets, plan.head_positions)
+        elif plan.head_positions is not None:
             self.publish_head(plan.head_positions[0], plan.head_positions[1])
 
         if plan.lift_position_m is not None:
@@ -548,6 +612,7 @@ async def run_bridge_loop() -> None:
         max_workspace_radius_m=float(os.getenv("ROBOT_MAX_WORKSPACE_RADIUS_M", "10.0")),
         watchdog_timeout_seconds=float(os.getenv("LOCAL_WATCHDOG_TIMEOUT_SECONDS", "2.5")),
         head_order=os.getenv("PANTHER_HEAD_ORDER", "pitch_yaw"),
+        head_full_range=os.getenv("PANTHER_HEAD_FULL_RANGE", "0").strip().lower() in {"1", "true", "yes", "on"},
     )
     camera_mgr = PantherCameraManager(
         idle_timeout_seconds=float(os.getenv("PANTHER_CAMERA_IDLE_TIMEOUT_SECONDS", "90.0")),

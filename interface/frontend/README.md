@@ -12,6 +12,8 @@ Zero-credential browser client for the Swiss Multilingual Voice & Robotics Assis
 
 - **Generated Gestures** (Gesture box, voice, or ER 2): describe any arm gesture ("salute", "wave hello", "point at the door", "raise both arms"). Gemini returns hand keyframes only; `backend/app/robotics/gesture_planner.py` solves IK on the URDF, refuses unreachable poses, caps joint speed at 0.45 rad/s and keeps 3 cm from approximate head, neck and torso boxes. The plan previews in Simulation and waits for confirmation like every other motion; the bridge re-checks limits and speed and plays it through `/master_controller/joint_trajectory`.
 
+- **Head** (`backend/app/robotics/head_limits.py`): "look left / right / up / down [N degrees]", "turn your head left", "look straight ahead" (7 languages) become `move_head` with exact angles; it never rotates the base, and like `look_at` it needs no confirmation. `look_at` now aims steeply at the floor (no more 0.45 damping). Gestures may include head keyframes ("nod", "shake your head", "look around"), capped at 0.6 rad/s. Range: 15° up to 81° down, ±85° yaw (5° inside the hardware limits). **On the robot bridge the head stays in the old conservative range (pitch ±0.34 rad, yaw ±1.2 rad) until `PANTHER_HEAD_FULL_RANGE=1` is set**: first send a small yaw on the robot and check in `/joint_states` that `joint_head1` moves, since the vendor does not document the head command order. With `master_controller` running, head moves are sent as smooth named-joint trajectories; without it, as one direct command as before.
+
 The camera and simulation views only read. Commands reach the robot only after a human confirms them.
 
 ## Security

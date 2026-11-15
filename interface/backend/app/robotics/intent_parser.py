@@ -574,6 +574,75 @@ class ExplicitClauseSpec:
     speed: float = 0.25
     has_explicit_number: bool = False
     rationale: str = ""
+    head_pitch_rad: float | None = None
+    head_yaw_rad: float | None = None
+
+
+# ---------------------------------------------------------------------------- head commands
+# "look left", "turn your head right 30 degrees", "look down", "schau nach oben", "regarde à gauche",
+# "mira abajo", "podívej se doleva", "向左看". Matched BEFORE base rotation, so "turn your head left"
+# moves the head instead of rotating the whole robot. "look around" / "look at X" are not matched
+# (they stay camera-inspection tasks for ER 2).
+_HEAD_DIR_WORDS = {
+    "left": "left", "right": "right", "up": "up", "down": "down",
+    "straight": "center", "ahead": "center", "forward": "center", "center": "center", "centre": "center",
+    "links": "left", "rechts": "right", "rächts": "right", "oben": "up", "obe": "up", "unten": "down", "unde": "down",
+    "geradeaus": "center", "gerade": "center", "vorne": "center", "vorn": "center", "füre": "center",
+    "gauche": "left", "droite": "right", "haut": "up", "bas": "down", "devant": "center",
+    "izquierda": "left", "derecha": "right", "arriba": "up", "abajo": "down", "adelante": "center", "frente": "center",
+    "doleva": "left", "doprava": "right", "nahoru": "up", "dolů": "down", "dolu": "down", "dopředu": "center", "rovně": "center",
+}
+_HEAD_CMD_RE = re.compile(
+    r"\b(?:look(?:ing)?|turn\s+(?:your\s+|the\s+)?head|move\s+(?:your\s+|the\s+)?head|tilt\s+(?:your\s+|the\s+)?head"
+    r"|head|face)\s+(?:to\s+(?:the\s+)?|towards?\s+(?:the\s+)?)?(left|right|up|down|straight|ahead|forward|center|centre)\b"
+    r"|\b(?:schau\w*|guck\w*|blick\w*|lueg\w*|dreh\w*\s+(?:den\s+|dein\w*\s+|de\s+)?kopf|kopf)\s+(?:nach\s+|noch\s+)?"
+    r"(links|rechts|rächts|oben|obe|unten|unde|geradeaus|gerade|vorne?|füre)\b"
+    r"|\b(?:regarde\w*|tourne\w*\s+la\s+t[êe]te|t[êe]te)\s+(?:[àa]\s+|vers\s+(?:la\s+|le\s+)?|en\s+)?"
+    r"(gauche|droite|haut|bas|devant)\b"
+    r"|\b(?:mira\w*|gira\w*\s+la\s+cabeza|cabeza)\s+(?:a\s+la\s+|hacia\s+(?:la\s+)?|al?\s+)?"
+    r"(izquierda|derecha|arriba|abajo|adelante|frente)\b"
+    r"|\b(?:pod[íi]vej\s+se|ot[oč]\w*\s+hlavu|hlavou?)\s+(doleva|doprava|nahoru|dol[ůu]|dop[řr]edu|rovn[ěe])\b"
+    r"|(向左看|往左看|向右看|往右看|向上看|往上看|抬头|抬頭|向下看|往下看|低头|低頭|向前看|看前面)",
+    re.IGNORECASE,
+)
+_HEAD_ZH = {
+    "向左看": "left", "往左看": "left", "向右看": "right", "往右看": "right",
+    "向上看": "up", "往上看": "up", "抬头": "up", "抬頭": "up",
+    "向下看": "down", "往下看": "down", "低头": "down", "低頭": "down", "向前看": "center", "看前面": "center",
+}
+_HEAD_DEGREES_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:°|deg\b|degrees?|grad\b|grade\b|degr[ée]s?|grados?|stup[ňn]\w*|度)", re.IGNORECASE
+)
+HEAD_DEFAULT_DEG = {"left": 45.0, "right": 45.0, "up": 15.0, "down": 40.0}
+
+
+def parse_head_command(text: str) -> tuple[float | None, float | None, str, bool] | None:
+    """(pitch_rad, yaw_rad, direction, has_explicit_number) for a head command, else None.
+
+    Pitch: + looks down. Yaw: + looks left. The axis not named is left as None (unchanged),
+    except 'straight ahead', which centres both. Angles are clamped to the head limits.
+    """
+    from app.robotics.head_limits import clamp_pitch, clamp_yaw
+
+    m = _HEAD_CMD_RE.search(text)
+    if not m:
+        return None
+    token = next((g for g in m.groups() if g), "")
+    direction = _HEAD_ZH.get(token) or _HEAD_DIR_WORDS.get(token.lower(), "")
+    if not direction:
+        return None
+    if direction == "center":
+        return 0.0, 0.0, direction, True
+    deg_m = _HEAD_DEGREES_RE.search(text)
+    deg = float(deg_m.group(1).replace(",", ".")) if deg_m else HEAD_DEFAULT_DEG[direction]
+    rad = math.radians(deg)
+    if direction == "left":
+        return None, round(clamp_yaw(rad), 4), direction, bool(deg_m)
+    if direction == "right":
+        return None, round(clamp_yaw(-rad), 4), direction, bool(deg_m)
+    if direction == "up":
+        return round(clamp_pitch(-rad), 4), None, direction, bool(deg_m)
+    return round(clamp_pitch(rad), 4), None, direction, bool(deg_m)
 
 
 def parse_explicit_clause_spec(text: str, language: str = "auto") -> ExplicitClauseSpec | None:
@@ -627,6 +696,19 @@ def parse_explicit_clause_spec(text: str, language: str = "auto") -> ExplicitCla
             speed=0.25,
             has_explicit_number=True,
             rationale=f"Execute retargeted right-arm frisbee throw trajectory ({language}): {cleaned[:120]}",
+        )
+
+    head = parse_head_command(cleaned)
+    if head is not None:
+        pitch, yaw, direction, _ = head
+        return ExplicitClauseSpec(
+            clause=cleaned,
+            action="move_head",
+            speed=0.2,
+            has_explicit_number=True,
+            head_pitch_rad=pitch,
+            head_yaw_rad=yaw,
+            rationale=f"Turn the head {direction} ({language}): {cleaned[:120]}",
         )
 
     if _ROTATE_RE.search(cleaned):
@@ -759,6 +841,18 @@ def parse_multilingual_robot_intent(text: str, language: str = "auto") -> tuple[
             "object_label": "frisbee",
             "speed": 0.25,
             "rationale": f"Execute retargeted right-arm frisbee throw trajectory ({language}): {cleaned[:120]}",
+        }
+
+    # 3d. Head (before rotation, so "turn your head left" never rotates the base)
+    head = parse_head_command(cleaned)
+    if head is not None:
+        pitch, yaw, direction, _ = head
+        return "propose_robot_action", {
+            "action": "move_head",
+            "head_pitch_rad": pitch,
+            "head_yaw_rad": yaw,
+            "speed": 0.2,
+            "rationale": f"Turn the head {direction} ({language}): {cleaned[:120]}",
         }
 
     # 4. Rotation (check before left/right translation so "turn left" maps to rotate, not strafe)
@@ -1431,6 +1525,34 @@ def _describe_single_step(cmd: dict[str, Any], language: str) -> str:
         if is_gsw:
             return f"{tgt_name} mit em rächte Arm rüehre"
         return f"{tgt_name} mit dem rechten Arm werfen"
+
+    if action == "move_head":
+        parts = []
+        hy, hp = cmd.get("head_yaw_rad"), cmd.get("head_pitch_rad")
+        if hy is None and hp is None:
+            hy = hp = 0.0
+        if hy is not None:
+            d = round(math.degrees(float(hy)))
+            parts.append(f"{abs(d)}° {('L' if d > 0 else 'R') if d else ''}".strip())
+        if hp is not None:
+            d = round(math.degrees(float(hp)))
+            parts.append(f"{abs(d)}° {('↓' if d > 0 else '↑') if d else ''}".strip())
+        angles = ", ".join(parts)
+        if is_zh_tw:
+            return f"轉頭（{angles}）"
+        if is_zh:
+            return f"转头（{angles}）"
+        if is_es:
+            return f"girar la cabeza ({angles})"
+        if is_cs:
+            return f"otočit hlavu ({angles})"
+        if is_fr:
+            return f"tourner la tête ({angles})"
+        if is_en:
+            return f"turn the head ({angles})"
+        if is_gsw:
+            return f"Chopf dräie ({angles})"
+        return f"Kopf drehen ({angles})"
 
     if action == "generated_gesture":
         gesture = cmd.get("gesture") or {}

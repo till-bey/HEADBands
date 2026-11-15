@@ -34,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.robotics.action_schema import GestureTrajectory, GestureTrajectoryPoint
+from app.robotics.head_limits import HEAD_JOINTS, HEAD_LIMITS, HEAD_MAX_VEL_RPS
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,7 @@ MAX_JOINT_VEL = 0.45  # rad/s
 SAMPLE_DT = 0.1  # s, Cartesian interpolation step between keyframes
 REACH_TOL_M = 0.03
 CLEARANCE_M = 0.03
+HEAD_MOVING_CLEARANCE_M = 0.08  # head box is for the head at rest; more margin while it moves
 HAND_SEPARATION_M = 0.10
 MAX_DURATION_S = 30.0
 MAX_KEYFRAMES = 16
@@ -79,12 +81,24 @@ class HandKeyframe(BaseModel):
     note: str = Field(default="", max_length=120)
 
 
+class HeadKeyframe(BaseModel):
+    """Head pose at time t, in degrees. Null keeps that axis where it is."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    t: float = Field(description="Seconds from the start of the gesture, > 0, increasing.")
+    pitch_deg: float | None = Field(default=None, description="+ looks down (max 80), - looks up (max 15).")
+    yaw_deg: float | None = Field(default=None, description="+ looks left, - looks right (max 85 each way).")
+    note: str = Field(default="", max_length=120)
+
+
 class GestureKeyframePlan(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str = Field(max_length=60, description="Short gesture name, e.g. 'salute'.")
     summary: str = Field(default="", max_length=240)
     keyframes: list[HandKeyframe] = Field(default_factory=list)
+    head_keyframes: list[HeadKeyframe] = Field(default_factory=list)
     return_to_start: bool = True
 
 
@@ -101,6 +115,10 @@ LEFT, +z up. The hand point is the gripper base; fingertips are about 8 cm furth
 - Torso occupies x in [-0.13, 0.11], y in [-0.16, 0.16], z below 0.06. Keep hands at least 5 cm outside it.
 - The right arm cannot cross far to the left of y = -0.05, and the left arm not right of y = +0.05.
 - Hands must stay at least 10 cm apart from each other.
+Head (optional `head_keyframes`, degrees): pitch_deg + looks down (up to 80), - looks up (up to 15);
+yaw_deg + looks left, - looks right (up to 85 each way); null keeps that axis. Use the head for nods,
+head shakes, looking around, or to look at the hand during a gesture. Head-only gestures need no hand keyframes.
+Keep head moves gentle (about 20-30 deg for a nod or shake); when the head moves, keep hands 10 cm from it.
 Rules:
 - Use 2 to 6 keyframes per arm used; only include arms that move. Times in seconds from start, increasing,
   first keyframe at t >= 1.0; whole gesture under 12 s. Slow, smooth, natural.
@@ -112,6 +130,9 @@ Examples:
 - "wave" (right hand): raise the right hand beside the head: t=2.0 (0.15, -0.40, 0.25), then
   t=2.8 (0.15, -0.30, 0.27), t=3.6 (0.15, -0.40, 0.25), t=4.4 (0.15, -0.30, 0.27), t=5.2 (0.15, -0.40, 0.25).
 - "raise both arms": t=3.0 left (0.10, 0.35, 0.45) and right (0.10, -0.35, 0.45), hold until t=4.5.
+- "nod" (head only): head pitch 20 at t=1.0, 0 at t=1.8, 20 at t=2.6, 0 at t=3.4. No hand keyframes.
+- "shake your head" (head only): yaw 25 at t=1.0, -25 at t=2.0, 25 at t=3.0, 0 at t=3.8.
+- "look around": yaw 60 at t=2.0, -60 at t=5.0, 0 at t=6.5 (pitch null).
 """
 
 
@@ -301,6 +322,37 @@ class GesturePlanResult:
     attempts: int = 1
 
 
+def _sample_track(
+    key_t: list[float],
+    key_q: list[np.ndarray],
+    q0: np.ndarray,
+    times: np.ndarray,
+    return_to_start: bool,
+) -> np.ndarray:
+    """Ease between keyframe joint poses; after the last one, ease back to q0 or hold."""
+    last_key_t = key_t[-1]
+    out: list[np.ndarray] = []
+    q_hold: np.ndarray | None = None
+    for t in times:
+        if t <= last_key_t + 1e-9 and len(key_t) > 1:
+            i = max(0, int(np.searchsorted(key_t, t, side="right")) - 1)
+            i = min(i, len(key_t) - 2)
+            t0, t1 = key_t[i], key_t[i + 1]
+            a = 1.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            a = 0.5 - 0.5 * math.cos(math.pi * min(max(a, 0.0), 1.0))  # ease in/out
+            out.append(key_q[i] + a * (key_q[i + 1] - key_q[i]))
+        else:
+            if q_hold is None:
+                q_hold = out[-1].copy() if out else key_q[-1].copy()
+            if return_to_start:
+                a = min(1.0, (t - last_key_t) / RETURN_SECONDS)
+                a = 0.5 - 0.5 * math.cos(math.pi * a)
+                out.append(q_hold + a * (q0 - q_hold))
+            else:
+                out.append(q_hold.copy())
+    return np.array(out)
+
+
 def plan_from_keyframes(
     plan: GestureKeyframePlan,
     description: str,
@@ -311,14 +363,19 @@ def plan_from_keyframes(
     reasons: list[str] = []
     current_positions = current_positions or {}
     frames = sorted(plan.keyframes, key=lambda k: (k.arm, k.t))[:MAX_KEYFRAMES]
+    head_frames = sorted(plan.head_keyframes, key=lambda k: k.t)[:MAX_KEYFRAMES]
     arms = sorted({k.arm for k in frames})
-    if not arms:
+    if not arms and not head_frames:
         return GesturePlanResult(False, ["The plan has no keyframes."], keyframe_plan=plan)
     for k in frames:
         if not all(math.isfinite(v) for v in (k.t, k.x, k.y, k.z)) or k.t <= 0:
             return GesturePlanResult(False, [f"Keyframe {k.arm} t={k.t} is not finite or not after 0."], keyframe_plan=plan)
+    for h in head_frames:
+        vals = [h.t] + [v for v in (h.pitch_deg, h.yaw_deg) if v is not None]
+        if not all(math.isfinite(v) for v in vals) or h.t <= 0:
+            return GesturePlanResult(False, [f"Head keyframe t={h.t} is not finite or not after 0."], keyframe_plan=plan)
 
-    end_t = max(k.t for k in frames)
+    end_t = max([k.t for k in frames] + [h.t for h in head_frames])
     if plan.return_to_start:
         end_t += RETURN_SECONDS
     times = np.round(np.arange(SAMPLE_DT, end_t + 1e-9, SAMPLE_DT), 4)
@@ -356,36 +413,37 @@ def plan_from_keyframes(
             key_q.append(q_k)
         if reasons:
             break
-        last_key_t = key_t[-1]
-        qs, tips = [], []
-        q_hold: np.ndarray | None = None  # pose at the last keyframe, start of return / hold
-        for t in times:
-            if t <= last_key_t + 1e-9:
-                i = max(0, int(np.searchsorted(key_t, t, side="right")) - 1)
-                i = min(i, len(key_t) - 2)
-                t0, t1 = key_t[i], key_t[i + 1]
-                a = 1.0 if t1 <= t0 else (t - t0) / (t1 - t0)
-                a = 0.5 - 0.5 * math.cos(math.pi * min(max(a, 0.0), 1.0))  # ease in/out
-                qs.append(key_q[i] + a * (key_q[i + 1] - key_q[i]))
-            else:
-                # After this arm's last keyframe: ease back to the start pose in joint space, or hold.
-                if q_hold is None:
-                    q_hold = qs[-1].copy() if qs else q0.copy()
-                if plan.return_to_start:
-                    a = min(1.0, (t - last_key_t) / RETURN_SECONDS)
-                    a = 0.5 - 0.5 * math.cos(math.pi * a)
-                    qs.append(q_hold + a * (q0 - q_hold))
-                else:
-                    qs.append(q_hold.copy())
-            tips.append(chain.fk(qs[-1])[0])
-        if reasons:
-            break
-        joint_tracks[arm] = np.array(qs)
-        tip_tracks[arm] = np.array(tips)
+        qs = _sample_track(key_t, key_q, q0, times, plan.return_to_start)
+        joint_tracks[arm] = qs
+        tip_tracks[arm] = np.array([chain.fk(q)[0] for q in qs])
     if reasons:
         return GesturePlanResult(False, reasons, keyframe_plan=plan)
 
+    # Head: pitch/yaw keyframes in degrees, clamped to the head limits, eased like the arms.
+    head_track: np.ndarray | None = None
+    head_q0 = np.array([float(current_positions.get(n, 0.0)) for n in HEAD_JOINTS])
+    if head_frames:
+        lo = np.array([HEAD_LIMITS[n][0] for n in HEAD_JOINTS])
+        hi = np.array([HEAD_LIMITS[n][1] for n in HEAD_JOINTS])
+        head_q0 = np.clip(head_q0, lo, hi)
+        key_t, key_q = [0.0], [head_q0]
+        for h in head_frames:
+            prev = key_q[-1]
+            q_h = np.array([
+                math.radians(h.pitch_deg) if h.pitch_deg is not None else prev[0],
+                math.radians(h.yaw_deg) if h.yaw_deg is not None else prev[1],
+            ])
+            q_h = np.clip(q_h, lo, hi)
+            if h.t <= key_t[-1] + 1e-6:
+                key_q[-1] = q_h
+                continue
+            key_t.append(h.t)
+            key_q.append(q_h)
+        head_track = _sample_track(key_t, key_q, head_q0, times, plan.return_to_start)
+    head_moves = head_track is not None and float(np.abs(head_track - head_q0).max()) > 0.05
+
     # Collisions: forearm and hand points vs head / neck / torso, and hand-to-hand distance.
+    # The head box is drawn for the head at rest; when the head also moves, keep arms further away.
     min_clear = float("inf")
     for arm in arms:
         chain = chains[arm]
@@ -394,11 +452,12 @@ def plan_from_keyframes(
                 for name, box in OBSTACLES.items():
                     d = _box_distance(p, box)
                     min_clear = min(min_clear, d)
-                    if d < CLEARANCE_M:
+                    need = HEAD_MOVING_CLEARANCE_M if (name == "head" and head_moves) else CLEARANCE_M
+                    if d < need:
                         reasons.append(
-                            f"{arm} arm comes {max(d, 0) * 100:.0f} cm from the {name} at t={times[idx]:.1f} s "
+                            f"{arm} arm comes {max(d, 0) * 100:.1f} cm from the {name} at t={times[idx]:.1f} s "
                             f"(hand at {tip_tracks[arm][idx][0]:.2f}, {tip_tracks[arm][idx][1]:.2f}, {tip_tracks[arm][idx][2]:.2f}); "
-                            f"needs {CLEARANCE_M * 100:.0f} cm."
+                            f"needs {need * 100:.0f} cm{' while the head moves' if need > CLEARANCE_M else ''}."
                         )
                         break
                 if reasons:
@@ -417,19 +476,27 @@ def plan_from_keyframes(
     names: list[str] = []
     cols: list[np.ndarray] = []
     starts: list[np.ndarray] = []
+    caps: list[float] = []
     for arm in arms:
         names.extend(chains[arm].names)
         cols.append(joint_tracks[arm])
         starts.append(q_start[arm])
+        caps.extend([MAX_JOINT_VEL] * 8)
+    if head_track is not None:
+        names.extend(HEAD_JOINTS)
+        cols.append(head_track)
+        starts.append(head_q0)
+        caps.extend([HEAD_MAX_VEL_RPS] * 2)
     Q = np.concatenate(cols, axis=1)
     Q_full = np.vstack([np.concatenate(starts), Q])
     T_full = np.concatenate([[0.0], times])
     # Stretch only the intervals that are too fast (raising an arm from rest), not the whole gesture,
-    # so a wave keeps its rhythm once the hand is up.
-    dq = np.abs(np.diff(Q_full, axis=0)).max(axis=1)
-    dt = np.maximum(np.diff(T_full), dq / MAX_JOINT_VEL)
+    # so a wave keeps its rhythm once the hand is up. Arms and head have their own speed caps.
+    step = np.abs(np.diff(Q_full, axis=0))
+    cap = np.array(caps) * 0.98  # 2% under each cap so 1 ms / 1e-5 rad rounding cannot cross it
+    dt = np.maximum(np.diff(T_full), (step / cap).max(axis=1))
     out_times = np.cumsum(dt)
-    peak = float((dq / dt).max()) if dq.size else 0.0
+    peak = float((step / dt[:, None]).max()) if step.size else 0.0
     scale = float(out_times[-1] / times[-1]) if times[-1] > 0 else 1.0
     if out_times[-1] > MAX_DURATION_S:
         return GesturePlanResult(
@@ -449,7 +516,7 @@ def plan_from_keyframes(
             for t, row in zip(out_times, Q, strict=True)
         ],
         start_positions=[round(float(v), 5) for v in np.concatenate(starts)],
-        keyframes=[k.model_dump() for k in frames],
+        keyframes=[k.model_dump() for k in frames] + [{"head": True, **h.model_dump()} for h in head_frames],
         duration_s=round(float(out_times[-1]), 3),
         peak_joint_vel_rps=round(peak, 4),
         min_clearance_m=round(min_clear, 4) if math.isfinite(min_clear) else None,
@@ -461,6 +528,26 @@ def plan_from_keyframes(
 # --------------------------------------------------------------------------- providers
 def _mock_keyframes(description: str) -> GestureKeyframePlan:
     d = description.lower()
+    if any(w in d for w in ("nod", "nick", "hoch", "oui", "asiente", "kývn", "点头", "點頭")):
+        return GestureKeyframePlan(
+            name="nod",
+            summary="Head nods twice.",
+            head_keyframes=[HeadKeyframe(t=1.0 + 0.8 * i, pitch_deg=20.0 if i % 2 == 0 else 0.0) for i in range(4)],
+        )
+    if any(w in d for w in ("shake", "schüttel", "secoue", "niega", "zavrť", "摇头", "搖頭")):
+        return GestureKeyframePlan(
+            name="head shake",
+            summary="Head shakes left and right.",
+            head_keyframes=[HeadKeyframe(t=1.0, yaw_deg=25.0), HeadKeyframe(t=2.0, yaw_deg=-25.0),
+                            HeadKeyframe(t=3.0, yaw_deg=25.0), HeadKeyframe(t=3.8, yaw_deg=0.0)],
+        )
+    if "look around" in d or "umschauen" in d or "schau dich um" in d:
+        return GestureKeyframePlan(
+            name="look around",
+            summary="Head scans left, then right.",
+            head_keyframes=[HeadKeyframe(t=2.0, yaw_deg=60.0), HeadKeyframe(t=5.0, yaw_deg=-60.0),
+                            HeadKeyframe(t=6.5, yaw_deg=0.0)],
+        )
     if any(w in d for w in ("wave", "wink", "salü", "hallo", "hello", "coucou", "saluda", "mávn")):
         xs = [(-0.40, 0.25), (-0.30, 0.27)] * 2 + [(-0.40, 0.25)]
         return GestureKeyframePlan(

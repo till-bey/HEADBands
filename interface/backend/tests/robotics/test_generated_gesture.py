@@ -88,7 +88,7 @@ def test_validator_refuses_tampered_trajectories() -> None:
     with pytest.raises(SafetyValidationError, match="speed"):
         v.assert_gesture_trajectory_safe(fast)
     wrong = _planned().model_copy(deep=True)
-    wrong.joint_names[0] = "joint_head0"
+    wrong.joint_names[0] = "body_joint"  # the lift is never part of a gesture
     with pytest.raises(SafetyValidationError, match="outside the arms"):
         v.assert_gesture_trajectory_safe(wrong)
     out = _planned().model_copy(deep=True)
@@ -208,10 +208,10 @@ def test_bridge_refuses_unconfirmed_or_tampered_gestures(bridge) -> None:
         p["t"] /= 4
     with pytest.raises(bridge.LocalSafetyRejectedError, match="speed"):
         sup.validate_and_compute_panther_plan(_command(fast))
-    head = _planned().model_dump(mode="json")
-    head["joint_names"][0] = "joint_head0"
+    lift = _planned().model_dump(mode="json")
+    lift["joint_names"][0] = "body_joint"  # the lift is never part of a gesture
     with pytest.raises(bridge.LocalSafetyRejectedError, match="not allowed"):
-        sup.validate_and_compute_panther_plan(_command(head))
+        sup.validate_and_compute_panther_plan(_command(lift))
 
 
 def test_bridge_delays_start_when_the_arm_is_elsewhere(bridge) -> None:

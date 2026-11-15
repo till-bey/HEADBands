@@ -111,11 +111,20 @@ ARM_JOINT_LIMITS: dict[str, tuple[float, float]] = {
 }
 GESTURE_MAX_DURATION_S = 30.0
 
-# PR #521 conservative head bounds: pitch in [-0.34, +0.34] rad, yaw in [-1.20, +1.20] rad
+# Head bounds. joint_head0 = pitch (+ looks down), joint_head1 = yaw (+ looks left).
+# Conservative (PR #521): pitch [-0.34, +0.34], yaw [-1.20, +1.20]. Used until PANTHER_HEAD_FULL_RANGE=1,
+# which should only be set once the head command order has been checked on the robot (send a small
+# yaw, watch which /joint_states entry moves).
 HEAD_PITCH_MIN_RAD = -0.34
 HEAD_PITCH_MAX_RAD = 0.34
 HEAD_YAW_MIN_RAD = -1.20
 HEAD_YAW_MAX_RAD = 1.20
+# Full range: URDF/user-guide limits minus 5 deg (pitch -0.348..1.5, yaw +-1.57).
+HEAD_FULL_PITCH_MIN_RAD = -0.2607
+HEAD_FULL_PITCH_MAX_RAD = 1.4127
+HEAD_FULL_YAW_MAX_RAD = 1.4827
+HEAD_MAX_VEL_RPS = 0.6  # smoothing speed for head moves
+HEAD_HARD_MAX_VEL_RPS = 0.7  # gesture trajectories are refused above this
 
 # Retargeted right-arm frisbee throw trajectory keyframes (t_sec, (joint_ra0..joint_ra7), joint_rf)
 # Derived from HEADBands clean_up `motion/retarget/joints_trajectory_shoulder_rel_3_v5.csv`

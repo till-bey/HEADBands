@@ -17,6 +17,11 @@ from swiss_robot_bridge.panther_topics import (
     GRIPPER_DEFAULT_VEL,
     GRIPPER_MODE_PARALLEL,
     GRIPPER_OPEN_POS,
+    HEAD_FULL_PITCH_MAX_RAD,
+    HEAD_FULL_PITCH_MIN_RAD,
+    HEAD_FULL_YAW_MAX_RAD,
+    HEAD_HARD_MAX_VEL_RPS,
+    HEAD_JOINTS,
     HEAD_PITCH_MAX_RAD,
     HEAD_PITCH_MIN_RAD,
     HEAD_YAW_MAX_RAD,
@@ -33,6 +38,7 @@ ALLOWED_LOCAL_ACTIONS = frozenset(
         "move_to",
         "rotate",
         "look_at",
+        "move_head",
         "inspect_object",
         "pick_object",
         "place_object",
@@ -63,11 +69,18 @@ class LocalSafetyRejectedError(ValueError):
 
 def check_gesture_locally(
     gesture: LocalGestureTrajectory,
+    head_limits: dict[str, tuple[float, float]] | None = None,
 ) -> tuple[tuple[str, ...], list[tuple[float, tuple[float, ...], float | None]]]:
-    """Re-check a cloud-planned gesture against local limits; return (joints, points) for playback."""
+    """Re-check a cloud-planned gesture against local limits; return (joints, points) for playback.
+
+    Head joints are checked against the bridge's active head range (conservative unless
+    PANTHER_HEAD_FULL_RANGE=1), so a gesture planned for the full range is refused, not clipped.
+    """
+    limits = {**ARM_JOINT_LIMITS, **(head_limits or {})}
     names = tuple(gesture.joint_names)
-    if not names or len(set(names)) != len(names) or any(n not in ARM_JOINT_LIMITS for n in names):
+    if not names or len(set(names)) != len(names) or any(n not in limits for n in names):
         raise LocalSafetyRejectedError(f"Gesture joints not allowed locally: {list(names)}")
+    caps = [HEAD_HARD_MAX_VEL_RPS if n in HEAD_JOINTS else MAX_ARM_JOINT_VEL_RPS for n in names]
     if not gesture.points or len(gesture.points) > 600:
         raise LocalSafetyRejectedError("Gesture must have 1 to 600 points.")
     out: list[tuple[float, tuple[float, ...], float | None]] = []
@@ -77,15 +90,17 @@ def check_gesture_locally(
             raise LocalSafetyRejectedError(f"Gesture point {i} malformed or not increasing in time.")
         q = tuple(float(v) for v in pt.positions)
         for name, v in zip(names, q):
-            lo, hi = ARM_JOINT_LIMITS[name]
+            lo, hi = limits[name]
             if not math.isfinite(v) or v < lo - 1e-3 or v > hi + 1e-3:
-                raise LocalSafetyRejectedError(f"Gesture point {i}: {name}={v:.3f} outside [{lo}, {hi}].")
+                hint = " (head range is conservative until PANTHER_HEAD_FULL_RANGE=1)" if name in HEAD_JOINTS else ""
+                raise LocalSafetyRejectedError(f"Gesture point {i}: {name}={v:.3f} outside [{lo}, {hi}]{hint}.")
         if prev_q is not None:
-            speed = max(abs(a - b) for a, b in zip(q, prev_q)) / (pt.t - prev_t)
-            if speed > MAX_ARM_JOINT_VEL_RPS + 1e-6:
-                raise LocalSafetyRejectedError(
-                    f"Gesture joint speed {speed:.2f} rad/s exceeds {MAX_ARM_JOINT_VEL_RPS} rad/s locally."
-                )
+            for name, a, b, cap in zip(names, q, prev_q, caps):
+                speed = abs(a - b) / (pt.t - prev_t)
+                if speed > cap + 1e-6:
+                    raise LocalSafetyRejectedError(
+                        f"Gesture joint speed {speed:.2f} rad/s on {name} exceeds {cap} rad/s locally."
+                    )
         out.append((round(pt.t, 4), q, None))
         prev_t, prev_q = pt.t, q
     if prev_t > GESTURE_MAX_DURATION_S:
@@ -155,6 +170,21 @@ class IncomingCloudCommand(BaseModel):
     created_at: datetime | None = None
     expires_at: datetime
     rationale: str = ""
+    head_pitch_rad: float | None = None
+    head_yaw_rad: float | None = None
+
+
+def head_bounds(full_range: bool) -> dict[str, tuple[float, float]]:
+    """Allowed (min, max) per head joint: conservative by default, full range once enabled."""
+    if full_range:
+        return {
+            HEAD_JOINTS[0]: (HEAD_FULL_PITCH_MIN_RAD, HEAD_FULL_PITCH_MAX_RAD),
+            HEAD_JOINTS[1]: (-HEAD_FULL_YAW_MAX_RAD, HEAD_FULL_YAW_MAX_RAD),
+        }
+    return {
+        HEAD_JOINTS[0]: (HEAD_PITCH_MIN_RAD, HEAD_PITCH_MAX_RAD),
+        HEAD_JOINTS[1]: (HEAD_YAW_MIN_RAD, HEAD_YAW_MAX_RAD),
+    }
 
 
 @dataclass
@@ -180,6 +210,7 @@ class PantherActuationPlan:
     target_distance_m: float = 0.0
     target_yaw_rad: float | None = None
     head_positions: tuple[float, float] | None = None  # /head_forward_position_controller/commands
+    head_targets: dict[str, float] | None = None  # move_head: only the named head joints move
     lift_position_m: float | None = None  # /lifting_controller/commands [0.0, 0.80]
     lift_velocity_mps: float = LIFT_MAX_VEL_MPS
     gripper_side: str | None = None  # "left" or "right"
@@ -208,6 +239,7 @@ class LocalSafetySupervisor:
     min_battery_percent: float = 10.0
     min_front_obstacle_distance_m: float = 0.35
     head_order: str = "pitch_yaw"  # URDF default: joint_head0=pitch, joint_head1=yaw
+    head_full_range: bool = False  # PANTHER_HEAD_FULL_RANGE=1 after checking the head order on the robot
 
     local_estop_latched: bool = False
     local_fault_active: bool = False
@@ -372,28 +404,49 @@ class LocalSafetySupervisor:
 
         return self.current_twist
 
-    def _compute_head_joints(self, cmd: IncomingCloudCommand) -> tuple[float, float]:
-        """Compute bounded Panther head joint angles `(joint_head0, joint_head1)`."""
+    def _head_pitch_yaw(self, cmd: IncomingCloudCommand) -> tuple[float, float]:
+        """Head (pitch, yaw) for an aiming command, clamped to the active head range.
+
+        Explicit head angles win. Otherwise aim at the target: the camera sits ~1.05 m above the
+        floor, so a frisbee 0.5 m in front needs about 64 deg down (no longer damped by 0.45).
+        """
+        bounds = head_bounds(self.head_full_range)
+        pmin, pmax = bounds[HEAD_JOINTS[0]]
+        ymin, ymax = bounds[HEAD_JOINTS[1]]
         yaw = 0.0
         pitch = 0.20  # gentle downward look toward workspace/floor by default
         if cmd.yaw_rad is not None and math.isfinite(cmd.yaw_rad):
-            yaw = _clamp(cmd.yaw_rad, HEAD_YAW_MIN_RAD, HEAD_YAW_MAX_RAD)
+            yaw = cmd.yaw_rad
         if cmd.target is not None:
             horiz = max(math.hypot(cmd.target.x, cmd.target.y), 0.25)
             if abs(cmd.target.x) > 1e-3 or abs(cmd.target.y) > 1e-3:
-                yaw = _clamp(math.atan2(cmd.target.y, max(cmd.target.x, 0.15)), HEAD_YAW_MIN_RAD, HEAD_YAW_MAX_RAD)
-            # Panther camera is ~1.1m above floor; positive pitch tilts head downward
+                yaw = math.atan2(cmd.target.y, max(cmd.target.x, 0.15))
             approx_cam_height_m = 1.05
-            pitch = _clamp(
-                math.atan2(approx_cam_height_m - cmd.target.z, horiz) * 0.45,
-                HEAD_PITCH_MIN_RAD,
-                HEAD_PITCH_MAX_RAD,
-            )
-        pitch = round(_clamp(pitch, HEAD_PITCH_MIN_RAD, HEAD_PITCH_MAX_RAD), 4)
-        yaw = round(_clamp(yaw, HEAD_YAW_MIN_RAD, HEAD_YAW_MAX_RAD), 4)
+            pitch = math.atan2(approx_cam_height_m - cmd.target.z, horiz)
+        if cmd.head_pitch_rad is not None and math.isfinite(cmd.head_pitch_rad):
+            pitch = cmd.head_pitch_rad
+        if cmd.head_yaw_rad is not None and math.isfinite(cmd.head_yaw_rad):
+            yaw = cmd.head_yaw_rad
+        return round(_clamp(pitch, pmin, pmax), 4), round(_clamp(yaw, ymin, ymax), 4)
+
+    def _compute_head_joints(self, cmd: IncomingCloudCommand) -> tuple[float, float]:
+        """Bounded head angles in the forward controller's element order."""
+        pitch, yaw = self._head_pitch_yaw(cmd)
         if self.head_order == "yaw_pitch":
             return (yaw, pitch)
         return (pitch, yaw)
+
+    def _head_targets(self, cmd: IncomingCloudCommand, *, only_explicit: bool = False) -> dict[str, float]:
+        """Named head targets for smooth playback; with only_explicit, just the axes the command gave."""
+        pitch, yaw = self._head_pitch_yaw(cmd)
+        if not only_explicit:
+            return {HEAD_JOINTS[0]: pitch, HEAD_JOINTS[1]: yaw}
+        out: dict[str, float] = {}
+        if cmd.head_pitch_rad is not None:
+            out[HEAD_JOINTS[0]] = pitch
+        if cmd.head_yaw_rad is not None:
+            out[HEAD_JOINTS[1]] = yaw
+        return out
 
     @staticmethod
     def _select_gripper_side(cmd: IncomingCloudCommand) -> str:
@@ -497,8 +550,14 @@ class LocalSafetySupervisor:
                 plan.target_yaw_rad = round(cmd.yaw_rad, 5)
                 plan.enable_ultrasonics = True
 
+        elif cmd.action == "move_head":
+            plan.head_targets = self._head_targets(cmd, only_explicit=True)
+            if not plan.head_targets:
+                raise LocalSafetyRejectedError("move_head needs head_pitch_rad and/or head_yaw_rad.")
+
         elif cmd.action in {"look_at", "inspect_object"}:
             plan.head_positions = self._compute_head_joints(cmd)
+            plan.head_targets = self._head_targets(cmd)
             plan.trigger_camera = True
 
         elif cmd.action == "pick_object":
@@ -506,6 +565,7 @@ class LocalSafetySupervisor:
             plan.gripper_position = GRIPPER_CLOSED_POS
             plan.gripper_velocity = GRIPPER_DEFAULT_VEL
             plan.head_positions = self._compute_head_joints(cmd)
+            plan.head_targets = self._head_targets(cmd)
             plan.trigger_camera = True
             if cmd.target is not None and cmd.target.z > 0.01:
                 plan.lift_position_m = round(_clamp(cmd.target.z, LIFT_MIN_M, LIFT_MAX_M), 4)
@@ -515,6 +575,7 @@ class LocalSafetySupervisor:
             plan.gripper_position = GRIPPER_OPEN_POS
             plan.gripper_velocity = GRIPPER_DEFAULT_VEL
             plan.head_positions = self._compute_head_joints(cmd)
+            plan.head_targets = self._head_targets(cmd)
             plan.trigger_camera = True
             if cmd.target is not None and cmd.target.z > 0.01:
                 plan.lift_position_m = round(_clamp(cmd.target.z, LIFT_MIN_M, LIFT_MAX_M), 4)
@@ -524,6 +585,7 @@ class LocalSafetySupervisor:
             plan.gripper_position = GRIPPER_OPEN_POS
             plan.gripper_velocity = 1.0
             plan.head_positions = self._compute_head_joints(cmd)
+            plan.head_targets = self._head_targets(cmd)
             plan.master_trajectory_joints = RIGHT_ARM_JOINTS + ("joint_rf",)
             plan.master_trajectory_points = [
                 (t_s, q_tuple, grip_val) for t_s, q_tuple, grip_val in RETARGETED_FRISBEE_THROW_WAYPOINTS
@@ -536,7 +598,9 @@ class LocalSafetySupervisor:
         elif cmd.action == "generated_gesture":
             if cmd.gesture is None:
                 raise LocalSafetyRejectedError("generated_gesture arrived without a trajectory.")
-            plan.master_trajectory_joints, plan.master_trajectory_points = check_gesture_locally(cmd.gesture)
+            plan.master_trajectory_joints, plan.master_trajectory_points = check_gesture_locally(
+                cmd.gesture, head_bounds(self.head_full_range)
+            )
             plan.trajectory_duration_seconds = plan.master_trajectory_points[-1][0]
             plan.switch_arm_trajectory_controllers = True
 

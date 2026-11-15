@@ -20,6 +20,7 @@ from app.robotics.action_schema import (
     RobotStatus,
     Target3D,
 )
+from app.robotics.head_limits import clamp_pitch, clamp_yaw
 from app.robotics.intent_parser import (
     ExplicitClauseSpec,
     parse_explicit_clause_spec,
@@ -76,7 +77,7 @@ You NEVER control motors directly and NEVER emit raw ROS topic paths, shell comm
 Robot hardware capabilities (mapped deterministically downstream by the local ROS 2 safety bridge):
 - Holonomic 4WS mobile base: `move_to` (+x forward, -x backward, +y left strafe, -y right strafe in meters) and `rotate` (`yaw_rad` in [-3.14159, +3.14159] rad).
 - Vertical torso lift: `target.z` in [0.0, 0.80] meters (`LIFT_VEL = 0.05` m/s).
-- 2-DOF pan/tilt head with Orbbec Gemini 2 RGB-D camera: `look_at` or `inspect_object` aims the head camera and captures a frame without wheel motion (`requires_confirmation=false`).
+- 2-DOF pan/tilt head with Orbbec Gemini 2 RGB-D camera: `look_at` or `inspect_object` aims the head camera and captures a frame without wheel motion (`requires_confirmation=false`). `move_head` turns ONLY the head to explicit angles, never the base: `head_yaw_rad` (+ looks left, - looks right, range +-1.48) and `head_pitch_rad` (+ looks down, - looks up, range -0.26 up to +1.41 down); leave an axis null to keep it, both 0.0 = straight ahead (`requires_confirmation=false`). "turn your head left" is `move_head`, NOT `rotate`. `look_at` may also carry head angles to aim precisely (e.g. steeply down at a frisbee near the feet).
 - Dual 8-DOF OpenArm manipulators + parallel grippers (`joint_la0..7`, `joint_ra0..7`, `joint_lf`, `joint_rf` via `/master_controller/joint_trajectory`): `pick_object` closes the gripper to grasp (`requires_confirmation=true`), `place_object` opens the gripper to release (`requires_confirmation=true`), and `throw_object` executes the retargeted right-arm frisbee throw trajectory with automatic gripper release (`requires_confirmation=true`). Mention "left" or "right" in `rationale` when a specific side is requested.
 - Expressive arm gestures with no dedicated action (salute, wave, point at something, raise one or both arms, thumbs-up pose, bow the arms, greet): `generated_gesture` with `object_label` = a short plain-English description of the gesture including which arm (e.g. "salute with the right hand", "wave hello with the right hand", "raise both arms"), `target=null`, `yaw_rad=null`, `speed=0.2`, `requires_confirmation=true`. A downstream planner designs and checks the motion; never describe joint angles.
 
@@ -84,7 +85,8 @@ Given an operator task instruction, current robot status, and optional live Pant
 1. Summarize the task/scene concisely in `scene_summary` (describe visible objects, floor clearance, and distances when a camera image is provided) and note safety observations.
 2. When a camera image is provided, detect relevant objects (frisbees, bottles, obstacles, targets) with normalized [y, x] points and [ymin, xmin, ymax, xmax] boxes in [0, 1000].
 3. Decompose single-step AND multi-step instructions into an ordered sequence of high-level proposals using ONLY:
-   move_to, rotate, look_at, inspect_object, pick_object, place_object, throw_object, generated_gesture, return_home, stop.
+   move_to, rotate, look_at, move_head, inspect_object, pick_object, place_object, throw_object, generated_gesture, return_home, stop.
+   Head angles (`head_pitch_rad`, `head_yaw_rad`) are null on every action except move_head, look_at and inspect_object.
 4. Conventions:
    - move_to: +x = forward (m), -x = backward (m), +y = left (m), -y = right (m), z = torso lift height in [0.0, 0.8] m (default 0.0).
    - rotate: yaw_rad in [-3.14159, +3.14159] (+1.5708 = 90 deg left/CCW, -1.5708 = 90 deg right/CW, 3.14159 = 180 deg turn around).
@@ -137,9 +139,22 @@ def _spec_to_proposal(spec: ExplicitClauseSpec, *, fallback_speed: float | None 
         yaw_rad=spec.yaw_rad if act == AllowedActionType.ROTATE else None,
         object_label="frisbee" if act == AllowedActionType.THROW_OBJECT else None,
         speed=spd,
-        requires_confirmation=(act != AllowedActionType.STOP),
+        requires_confirmation=act not in (AllowedActionType.STOP, AllowedActionType.MOVE_HEAD),
         rationale=spec.rationale,
+        head_pitch_rad=spec.head_pitch_rad if act == AllowedActionType.MOVE_HEAD else None,
+        head_yaw_rad=spec.head_yaw_rad if act == AllowedActionType.MOVE_HEAD else None,
     )
+
+
+def _apply_head_spec(prop: RobotActionProposal, spec: ExplicitClauseSpec) -> None:
+    """Make a proposal the exact head move the operator asked for (ER 2 may have said look_at)."""
+    prop.action = AllowedActionType.MOVE_HEAD
+    prop.head_pitch_rad = spec.head_pitch_rad
+    prop.head_yaw_rad = spec.head_yaw_rad
+    prop.target = None
+    prop.yaw_rad = None
+    prop.object_label = None
+    prop.requires_confirmation = False
 
 
 class GeminiRoboticsER2Client(RoboticsReasoningProvider):
@@ -205,6 +220,12 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                 )
             elif spec.action == "stop":
                 lines.append(f'- Clause {idx + 1} ("{spec.clause}"): action=stop, speed=0.0')
+            elif spec.action == "move_head":
+                lines.append(
+                    f'- Clause {idx + 1} ("{spec.clause}"): action=move_head, '
+                    f"head_pitch_rad={spec.head_pitch_rad}, head_yaw_rad={spec.head_yaw_rad} (null = keep), "
+                    "target=null, yaw_rad=null; the base does NOT rotate"
+                )
             elif spec.action == "throw_object":
                 lines.append(
                     f'- Clause {idx + 1} ("{spec.clause}"): action=throw_object, object_label=frisbee, '
@@ -230,8 +251,11 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
         # Case 1: Pure blind kinematic instruction (no camera frame, every clause is an unambiguous kinematic command)
         if not has_image and all(spec is not None for spec in clause_specs):
             concrete_specs = [spec for spec in clause_specs if spec is not None]
+            def _same(p: RobotActionProposal, s: ExplicitClauseSpec) -> bool:
+                return p.action.value == s.action or (s.action == "move_head" and p.action == AllowedActionType.LOOK_AT)
+
             if len(proposals) == len(concrete_specs) and all(
-                p.action.value == s.action for p, s in zip(proposals, concrete_specs, strict=True)
+                _same(p, s) for p, s in zip(proposals, concrete_specs, strict=True)
             ):
                 for prop, spec in zip(proposals, concrete_specs, strict=True):
                     if spec.action == "move_to":
@@ -248,6 +272,8 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                             prop.yaw_rad = spec.yaw_rad
                     elif spec.action == "throw_object" and not prop.object_label:
                         prop.object_label = "frisbee"
+                    elif spec.action == "move_head":
+                        _apply_head_spec(prop, spec)
                 return proposals
 
             # ER 2 merged, dropped, or artificially subdivided steps on a pure blind instruction -> restore exact steps
@@ -273,8 +299,14 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
             matched = False
             for j in range(prop_cursor, len(proposals)):
                 prop = proposals[j]
-                if prop.action.value != spec.action:
+                head_match = spec.action == "move_head" and prop.action in (
+                    AllowedActionType.MOVE_HEAD,
+                    AllowedActionType.LOOK_AT,
+                )
+                if prop.action.value != spec.action and not head_match:
                     continue
+                if head_match:
+                    _apply_head_spec(prop, spec)
                 if spec.action == "move_to":
                     prop.target = Target3D(
                         x=float(spec.x or 0.0),
@@ -302,6 +334,11 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                 insert_at = picks[0] + 1 if picks else len(proposals)
                 proposals.insert(insert_at, _spec_to_proposal(spec))
                 prop_cursor = insert_at + 1
+            elif not matched and spec.action == "move_head":
+                # ER 2 dropped an explicit head command: restore it in order (no confirmation needed,
+                # like look_at; the bridge clamps and smooths it).
+                proposals.insert(prop_cursor, _spec_to_proposal(spec))
+                prop_cursor += 1
         return proposals
 
     def _sanitize_er2_proposals(
@@ -342,7 +379,31 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
             elif proposal.action == AllowedActionType.ROTATE:
                 proposal.target = None
                 proposal.object_label = None
-            elif proposal.action == AllowedActionType.GENERATED_GESTURE:
+            elif proposal.action == AllowedActionType.MOVE_HEAD:
+                proposal.target = None
+                proposal.yaw_rad = None
+                proposal.object_label = None
+                proposal.requires_confirmation = False
+                if proposal.head_pitch_rad is None and proposal.head_yaw_rad is None:
+                    proposal.head_pitch_rad, proposal.head_yaw_rad = 0.0, 0.0
+
+            if proposal.action not in (
+                AllowedActionType.MOVE_HEAD,
+                AllowedActionType.LOOK_AT,
+                AllowedActionType.INSPECT_OBJECT,
+            ):
+                proposal.head_pitch_rad = proposal.head_yaw_rad = None
+            else:
+                if proposal.head_pitch_rad is not None and math.isfinite(proposal.head_pitch_rad):
+                    proposal.head_pitch_rad = round(clamp_pitch(proposal.head_pitch_rad), 4)
+                elif proposal.head_pitch_rad is not None:
+                    proposal.head_pitch_rad = None
+                if proposal.head_yaw_rad is not None and math.isfinite(proposal.head_yaw_rad):
+                    proposal.head_yaw_rad = round(clamp_yaw(proposal.head_yaw_rad), 4)
+                elif proposal.head_yaw_rad is not None:
+                    proposal.head_yaw_rad = None
+
+            if proposal.action == AllowedActionType.GENERATED_GESTURE:
                 proposal.target = None
                 proposal.yaw_rad = None
                 proposal.requires_confirmation = True
@@ -524,8 +585,10 @@ class MockRoboticsER2Client(RoboticsReasoningProvider):
                             yaw_rad=float(args["yaw_rad"]) if args.get("yaw_rad") is not None else None,
                             object_label=str(args["object_label"]) if args.get("object_label") else None,
                             speed=float(args.get("speed", 0.2)),
-                            requires_confirmation=(act != AllowedActionType.STOP),
+                            requires_confirmation=act not in (AllowedActionType.STOP, AllowedActionType.MOVE_HEAD),
                             rationale=str(args.get("rationale", clause)),
+                            head_pitch_rad=args.get("head_pitch_rad"),
+                            head_yaw_rad=args.get("head_yaw_rad"),
                         )
                     )
                 continue
