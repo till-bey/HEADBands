@@ -5,9 +5,9 @@ IK runs here with PyKDL. The robot or sim only receives one FollowJointTrajector
 <arm>_arm_joint_trajectory_position_controller, with the same controller switch PR #521 does:
 dual_arm_forward_position_controller off for the move, back on afterwards.
 
-  python3 cartesian_follow.py --arm left --path example_path.csv            # move
-  python3 cartesian_follow.py --arm left --path example_path.csv --dry-run  # plan + check only
-  python3 cartesian_follow.py --arm right --joints FILE.csv --dry-run       # joint angles given: no IK, same checks
+  ros2 run panther_examples cartesian_follow --arm left --path motion/example_path.csv            # move
+  ros2 run panther_examples cartesian_follow --arm left --path motion/example_path.csv --dry-run  # plan + check only
+  ros2 run panther_examples cartesian_follow --arm right --joints FILE.csv --dry-run              # joint angles given: no IK
 
 CSV rows: t,x,y,z,roll,pitch,yaw (s, m, rad), the gripper frame (link_lf / link_rf) in body_link.
 body_link is used because the lift moves it on the robot while the URDF has the lift fixed.
@@ -31,7 +31,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-FORWARD = "dual_arm_forward_position_controller"
+from panther_examples.robot import FORWARD, LEFT_TRAJ, RIGHT_TRAJ
+
 MAX_JOINT_VEL = 0.5  # rad/s, our choice; no vendor limit (PR #521 averages 0.35 rad/s on the robot)
 BASE = "body_link"
 
@@ -256,7 +257,7 @@ def main():
         rclpy.spin_until_future_complete(node, f, timeout_sec=10.0)
         return f.result()
 
-    jtc = f"{args.arm}_arm_joint_trajectory_position_controller"
+    jtc = LEFT_TRAJ if args.arm == "left" else RIGHT_TRAJ
     states = {c.name: c.state for c in call(node.create_client(ListControllers, "/controller_manager/list_controllers"),
                                             ListControllers.Request()).controller}
     if jtc not in states:

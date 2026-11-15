@@ -23,8 +23,8 @@ import numpy as np
 import PyKDL as kdl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples", "panther_examples"))
-from cartesian_follow import Chain, plan, spline_peak, timed  # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples"))
+from panther_examples.cartesian_follow import Chain, plan, spline_peak, timed  # noqa: E402
 
 ARM = "right"
 # First hand position (m) in base_footprint: floor level, robot centre, x forward. Converted to body_link with

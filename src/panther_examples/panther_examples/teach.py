@@ -30,37 +30,30 @@ from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectoryPoint
 from unix_msgs.msg import GripperCommand
 
-LEFT_ARM = [
-    "joint_la0", "joint_la1", "joint_la2", "joint_la3",
-    "joint_la4", "joint_la5", "joint_la6", "joint_la7",
-]
-RIGHT_ARM = [
-    "joint_ra0", "joint_ra1", "joint_ra2", "joint_ra3",
-    "joint_ra4", "joint_ra5", "joint_ra6", "joint_ra7",
-]
-ARMS = LEFT_ARM + RIGHT_ARM
-
-FORWARD = "dual_arm_forward_position_controller"
-LEFT_TRAJ = "left_arm_joint_trajectory_position_controller"
-RIGHT_TRAJ = "right_arm_joint_trajectory_position_controller"
-
-LEFT_HARDWARE = "unix_openarm_left"
-RIGHT_HARDWARE = "unix_openarm_right"
-LEFT_GRIPPER_HARDWARE = "raw_can0"
-RIGHT_GRIPPER_HARDWARE = "raw_can1"
-
-LEFT_GRIPPER_CONTROLLER = "left_unix_gripper3_controller"
-RIGHT_GRIPPER_CONTROLLER = "right_unix_gripper3_controller"
-LEFT_GRIPPER_CMD_TOPIC = "/left_gripper/gripper_command"
-RIGHT_GRIPPER_CMD_TOPIC = "/right_gripper/gripper_command"
-LEFT_GRIPPER_STATE_TOPIC = "/left_gripper/joint_states"
-RIGHT_GRIPPER_STATE_TOPIC = "/right_gripper/joint_states"
-
-LIFT_CONTROLLER = "lifting_controller"
-LIFT_CMD_TOPIC = "/lifting_controller/commands"
-LIFT_STATE_TOPIC = "/lifting_controller/joint_states"
-MIN_LIFT = 0.0
-MAX_LIFT = 0.8
+from panther_examples.robot import (
+    ARMS,
+    FORWARD,
+    LEFT_GRIPPER_CMD_TOPIC,
+    LEFT_GRIPPER_CONTROLLER,
+    LEFT_GRIPPER_HARDWARE,
+    LEFT_GRIPPER_STATE_TOPIC,
+    LEFT_ARM,
+    LEFT_HARDWARE,
+    LEFT_TRAJ,
+    LIFT_CMD_TOPIC,
+    LIFT_CONTROLLER,
+    LIFT_STATE_TOPIC,
+    MAX_LIFT,
+    MIN_LIFT,
+    RIGHT_ARM,
+    RIGHT_GRIPPER_CMD_TOPIC,
+    RIGHT_GRIPPER_CONTROLLER,
+    RIGHT_GRIPPER_HARDWARE,
+    RIGHT_GRIPPER_STATE_TOPIC,
+    RIGHT_HARDWARE,
+    RIGHT_TRAJ,
+    can_service,
+)
 
 SERVICE_TIMEOUT_SEC = 20.0
 
@@ -80,12 +73,6 @@ def out_dir():
     path = Path("/workspace/teach_out")
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def service_name(joint, verb):
-    """Build the CANopen service name for an arm joint."""
-    bus = "can0" if joint.startswith("joint_la") else "can1"
-    return f"/{bus}/{joint}/{verb}"
 
 
 def hardware_state(name):
@@ -259,7 +246,7 @@ def step_disable():
 
     failed = []
     for joint in ARMS:
-        if not call_trigger(service_name(joint, "disable")):
+        if not call_trigger(can_service(joint, "disable")):
             failed.append(joint)
 
     if failed:
@@ -276,7 +263,7 @@ def step_enable():
     """Re-enable all CAN joints and restore the forward controller to hold arms."""
     print("Re-enabling CAN joints on left and right arms...")
     for joint in ARMS:
-        call_trigger(service_name(joint, "enable"))
+        call_trigger(can_service(joint, "enable"))
 
     for ghw in (LEFT_GRIPPER_HARDWARE, RIGHT_GRIPPER_HARDWARE):
         print(f"Re-activating {ghw}...")
@@ -577,7 +564,7 @@ def step_play(node, action_file=None):
     print("Re-enabling CAN drives...")
     active_arms = ARMS if is_dual else RIGHT_ARM
     for joint in active_arms:
-        call_trigger(service_name(joint, "enable"))
+        call_trigger(can_service(joint, "enable"))
 
     for ghw in ([LEFT_GRIPPER_HARDWARE, RIGHT_GRIPPER_HARDWARE] if is_dual else [RIGHT_GRIPPER_HARDWARE]):
         subprocess.run(

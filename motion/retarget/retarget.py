@@ -23,8 +23,8 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import savgol_filter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples", "panther_examples"))
-from cartesian_follow import Chain, spline_peak, timed  # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "..", "src", "panther_examples"))
+from panther_examples.cartesian_follow import Chain, spline_peak, timed  # noqa: E402
 
 URDF = os.path.join(HERE, "..", "..", "src", "panther_sim", "urdf", "panther.urdf")
 # Recording axes -> body_link axes (x forward, y left, z up). The recording is believed to be the same, but not

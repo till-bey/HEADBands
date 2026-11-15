@@ -14,13 +14,12 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from panther_examples.robot import LIFT_VEL, MAX_LIFT as LIFT_TOP  # the vendor body height is the top of the travel
 
 SHARE = get_package_share_directory("panther_sim")
 ARM_HEAD = [f"joint_{s}a{i}" for s in "lr" for i in range(8)] + ["joint_head0", "joint_head1"]
 # Lift (base z axis) and grippers: the vendor URDF has them fixed; robot_description() frees them.
 LIFT_GRIPPERS = ["body_joint", "joint_lf", "joint_rf"]
-LIFT_VEL = "0.05"   # m/s, the SDK lift limit
-LIFT_TOP = 0.8      # m; lift runs 0 (bottom) to 0.8 (SDK, 800 mm travel; top unconfirmed on the robot); the vendor body height is the top
 FINGER_CLOSE = 0.7  # rad of stand-in finger swing at gripper 1.0 (closed); looks right, not a vendor value
 WHEELS = [f"joint_{w}_{k}" for w in ("fl", "fr", "bl", "br") for k in ("rev", "con")]
 # The vendor URDF gives every arm joint velocity="0"; rqt divides by it. 0.5 rad/s is our choice;
@@ -74,7 +73,7 @@ def robot_description(urdf_path, mesh_dir):
         lift = by_name["body_joint"]
         lift.set("type", "prismatic")
         lift.find("axis").set("xyz", "0 0 1")
-        lift.find("limit").attrib.update(lower="0", upper=str(LIFT_TOP), velocity=LIFT_VEL)
+        lift.find("limit").attrib.update(lower="0", upper=str(LIFT_TOP), velocity=str(LIFT_VEL))
         x, y, z = (float(v) for v in lift.find("origin").get("xyz").split())
         lift.find("origin").set("xyz", f"{x} {y} {z - LIFT_TOP}")
     for s in "lr":
