@@ -8,12 +8,15 @@ import logging
 import math
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc  # datetime.UTC needs Python 3.11; the ROS Humble container has 3.10
 from typing import Any
 
 import websockets
 
 from swiss_robot_bridge.camera_manager import PantherCameraManager
+from swiss_robot_bridge.controllers import ControllerSwitcher, StepStream, TimedStream
 from swiss_robot_bridge.local_safety import (
     LocalSafetyRejectedError,
     LocalSafetySupervisor,
@@ -24,6 +27,13 @@ from swiss_robot_bridge.local_safety import (
 from swiss_robot_bridge.panther_topics import (
     HEAD_JOINTS,
     HEAD_MAX_VEL_RPS,
+    LEFT_ARM_JOINTS,
+    LEFT_GRIPPER_CONTROLLER,
+    LEFT_TRAJ_CONTROLLER,
+    RIGHT_GRIPPER_CONTROLLER,
+    RIGHT_GRIPPER_MAX,
+    RIGHT_TRAJ_CONTROLLER,
+    TOPIC_LEFT_ARM_TRAJ,
     PANTHER_COMMAND_TOPICS,
     PANTHER_RMW_IMPLEMENTATION,
     PANTHER_ROS_DOMAIN_ID,
@@ -42,7 +52,6 @@ from swiss_robot_bridge.panther_topics import (
     TOPIC_LEFT_GRIPPER_STATES,
     TOPIC_LIFT_COMMANDS,
     TOPIC_LIFT_STATES,
-    TOPIC_MASTER_TRAJ,
     TOPIC_ODOM,
     TOPIC_POSE,
     TOPIC_PREEMPT_TELEOP,
@@ -73,8 +82,10 @@ class ROS2HardwareAdapter:
         # Publishers
         self._cmd_vel_pub: Any = None
         self._preempt_pub: Any = None
-        self._master_traj_pub: Any = None
-        self._right_arm_traj_pub: Any = None
+        self._arm_traj_pubs: dict[str, Any] = {}  # arm trajectory controller -> its joint_trajectory publisher
+        self._switcher: ControllerSwitcher | None = None
+        self._head_stream = TimedStream()  # head_forward_position_controller set-points over time
+        self._gripper_stream = StepStream()  # gripper commands at their times
         self._head_pub: Any = None
         self._lift_pub: Any = None
         self._left_gripper_pub: Any = None
@@ -144,15 +155,18 @@ class ROS2HardwareAdapter:
             self._image_cls = Image
             self._compressed_image_cls = CompressedImage
 
-            # Core Panther command publishers (active at boot on Panther + master_controller)
+            # Core Panther command publishers. Arms go straight to their trajectory controllers (switched
+            # in on demand, as master_gui does); master_controller no longer exists on clean_up.
             self._cmd_vel_pub = self._node.create_publisher(Twist, TOPIC_CMD_VEL, 10)
             self._preempt_pub = self._node.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
-            self._master_traj_pub = self._node.create_publisher(
-                JointTrajectory, TOPIC_MASTER_TRAJ, 10
-            )
-            self._right_arm_traj_pub = self._node.create_publisher(
-                JointTrajectory, TOPIC_RIGHT_ARM_TRAJ, 10
-            )
+            self._arm_traj_pubs = {
+                LEFT_TRAJ_CONTROLLER: self._node.create_publisher(JointTrajectory, TOPIC_LEFT_ARM_TRAJ, 10),
+                RIGHT_TRAJ_CONTROLLER: self._node.create_publisher(JointTrajectory, TOPIC_RIGHT_ARM_TRAJ, 10),
+            }
+            try:
+                self._switcher = ControllerSwitcher(rclpy, self._node)
+            except ImportError:
+                logger.warning("controller_manager_msgs missing: arm controllers will not be switched in")
             self._head_pub = self._node.create_publisher(Float64MultiArray, TOPIC_HEAD_COMMANDS, 10)
             self._lift_pub = self._node.create_publisher(JointState, TOPIC_LIFT_COMMANDS, 10)
 
@@ -401,26 +415,33 @@ class ROS2HardwareAdapter:
         self.hold_arms_if_moving()
 
     def hold_arms_if_moving(self) -> None:
-        """Stop an arm trajectory still playing (throw or gesture): replace it with 'hold here'.
+        """Stop a throw or gesture still playing: each arm holds where it is, head and grippers stop.
 
-        master_controller replaces the pending points of the joints a new trajectory names, so a
-        single point at the measured position, 0.3 s out, freezes the arm where it is.
+        A one-point trajectory at the measured position, 0.3 s out, replaces the goal the arm's
+        trajectory controller is following.
         """
+        self._head_stream.clear()
+        self._gripper_stream.clear()
         if not self._arm_traj_joints or time.monotonic() > self._arm_traj_until:
             return
-        joints = [j for j in self._arm_traj_joints if j in self.joint_positions]
         self._arm_traj_until = 0.0
-        if not joints or self._master_traj_pub is None or self._joint_traj_cls is None:
+        if self._joint_traj_cls is None:
             return
-        msg = self._joint_traj_cls()
-        msg.joint_names = joints
-        pt = self._joint_traj_point_cls()
-        pt.positions = [float(self.joint_positions[j]) for j in joints]
-        pt.time_from_start.sec = 0
-        pt.time_from_start.nanosec = 300_000_000
-        msg.points.append(pt)
-        self._master_traj_pub.publish(msg)
-        logger.warning("Arm trajectory interrupted: holding %d joints at their measured position", len(joints))
+        for controller, joints in ((LEFT_TRAJ_CONTROLLER, LEFT_ARM_JOINTS), (RIGHT_TRAJ_CONTROLLER, RIGHT_ARM_JOINTS)):
+            pub = self._arm_traj_pubs.get(controller)
+            if pub is None or not set(joints) <= set(self._arm_traj_joints):
+                continue
+            if not all(j in self.joint_positions for j in joints):
+                continue
+            msg = self._joint_traj_cls()
+            msg.joint_names = list(joints)
+            pt = self._joint_traj_point_cls()
+            pt.positions = [float(self.joint_positions[j]) for j in joints]
+            pt.time_from_start.sec = 0
+            pt.time_from_start.nanosec = 300_000_000
+            msg.points.append(pt)
+            pub.publish(msg)
+        logger.warning("Arm trajectory interrupted: arms held at their measured position")
 
     def publish_head(self, head0_rad: float, head1_rad: float) -> None:
         self.head_joints_rad = [round(float(head0_rad), 4), round(float(head1_rad), 4)]
@@ -429,65 +450,44 @@ class ROS2HardwareAdapter:
             msg.data = [float(head0_rad), float(head1_rad)]
             self._head_pub.publish(msg)
 
-    def _master_listening(self) -> bool:
-        if self._master_traj_pub is None or self._node is None:
-            return False
-        try:
-            return int(self._node.count_subscribers(TOPIC_MASTER_TRAJ)) > 0
-        except Exception:  # noqa: BLE001
-            return False
+    def _current_head(self) -> tuple[float, float]:
+        fallback = self.head_joints_rad or [0.0, 0.0]
+        return (
+            float(self.joint_positions.get(HEAD_JOINTS[0], fallback[0])),
+            float(self.joint_positions.get(HEAD_JOINTS[1], fallback[1])),
+        )
+
+    def _send_head(self, pitch: float, yaw: float) -> None:
+        """One command to head_forward_position_controller, in its element order."""
+        if self._supervisor.head_order == "yaw_pitch":
+            self.publish_head(yaw, pitch)
+        else:
+            self.publish_head(pitch, yaw)
+        self.head_joints_rad = [round(pitch, 4), round(yaw, 4)]
+        if self.sim_mode:
+            self._record_joints({HEAD_JOINTS[0]: pitch, HEAD_JOINTS[1]: yaw})
 
     def publish_head_targets(
         self,
         targets: dict[str, float],
         fallback_positions: tuple[float, float] | None = None,
     ) -> None:
-        """Move only the named head joints, smoothly.
-
-        With master_controller running, send a 10 Hz eased trajectory capped at HEAD_MAX_VEL_RPS,
-        addressed by joint name (master_controller steps head points at their times). Without it,
-        fall back to one direct command on the head forward controller, as before.
-        """
-        current = {
-            HEAD_JOINTS[i]: float(self.joint_positions.get(HEAD_JOINTS[i], (self.head_joints_rad or [0.0, 0.0])[i]))
-            for i in range(2)
-        }
-        final = {**current, **{k: float(v) for k, v in targets.items()}}
-        if self.sim_mode:
-            self._record_joints(final)
-        self.head_joints_rad = [round(final[HEAD_JOINTS[0]], 4), round(final[HEAD_JOINTS[1]], 4)]
-
-        if self._master_listening() and self._joint_traj_cls is not None:
-            names = [j for j in HEAD_JOINTS if j in targets]
-            gap = max(abs(final[j] - current[j]) for j in names)
-            duration = max(0.3, (gap / HEAD_MAX_VEL_RPS) * 1.6)  # eased profile peaks ~1.6x the mean speed
-            steps = max(1, int(math.ceil(duration / 0.1)))
-            msg = self._joint_traj_cls()
-            msg.joint_names = names
-            for k in range(1, steps + 1):
-                s = k / steps
-                a = 0.5 - 0.5 * math.cos(math.pi * s)
-                pt = self._joint_traj_point_cls()
-                t = s * duration
-                pt.time_from_start.sec = int(t)
-                pt.time_from_start.nanosec = int(round((t - int(t)) * 1e9)) % 1_000_000_000
-                pt.positions = [current[j] + a * (final[j] - current[j]) for j in names]
-                msg.points.append(pt)
-            self._master_traj_pub.publish(msg)
-            return
-
-        if fallback_positions is None:
-            ordered = (
-                (final[HEAD_JOINTS[1]], final[HEAD_JOINTS[0]])
-                if self._supervisor.head_order == "yaw_pitch"
-                else (final[HEAD_JOINTS[0]], final[HEAD_JOINTS[1]])
-            )
-        else:
-            ordered = fallback_positions
-        if self._head_pub is not None and self._f64_multi_cls is not None:
-            msg = self._f64_multi_cls()
-            msg.data = [float(ordered[0]), float(ordered[1])]
-            self._head_pub.publish(msg)
+        """Move only the named head joints, smoothly: an eased ramp at <= HEAD_MAX_VEL_RPS, streamed
+        to head_forward_position_controller every 0.1 s by tick_streams (it jumps to each command)."""
+        del fallback_positions  # kept for the call signature; element order is handled in _send_head
+        cur_p, cur_y = self._current_head()
+        tgt_p = float(targets.get(HEAD_JOINTS[0], cur_p))
+        tgt_y = float(targets.get(HEAD_JOINTS[1], cur_y))
+        gap = max(abs(tgt_p - cur_p), abs(tgt_y - cur_y))
+        duration = max(0.3, (gap / HEAD_MAX_VEL_RPS) * 1.6)  # eased profile peaks ~1.6x the mean speed
+        steps = max(1, int(math.ceil(duration / 0.1)))
+        now = time.monotonic()
+        points = [(now, (cur_p, cur_y))]
+        for k in range(1, steps + 1):
+            s = k / steps
+            a = 0.5 - 0.5 * math.cos(math.pi * s)
+            points.append((now + s * duration, (cur_p + a * (tgt_p - cur_p), cur_y + a * (tgt_y - cur_y))))
+        self._head_stream.points = points
 
     def publish_lift(self, z_m: float, velocity_mps: float) -> None:
         self.lift_height_m = round(float(z_m), 4)
@@ -500,11 +500,14 @@ class ROS2HardwareAdapter:
 
     def publish_gripper(self, side: str, position: float, velocity: float, mode: str = "parallel") -> None:
         if side == "right":
+            position = min(float(position), RIGHT_GRIPPER_MAX)  # as master_gui: right gripper closes no further
             self.right_gripper_pos = round(float(position), 3)
             pub = self._right_gripper_pub
         else:
             self.left_gripper_pos = round(float(position), 3)
             pub = self._left_gripper_pub
+        if self.sim_mode:
+            self._record_joints({"joint_rf" if side == "right" else "joint_lf": position})
 
         if pub is not None and self._gripper_cmd_cls is not None:
             msg = self._gripper_cmd_cls()
@@ -515,55 +518,74 @@ class ROS2HardwareAdapter:
             pub.publish(msg)
 
     def publish_master_trajectory(self, plan: PantherActuationPlan) -> None:
-        """Publish whole-upper-body trajectory to `/master_controller/joint_trajectory` (and right-arm trajectory)."""
+        """Play a whole-upper-body trajectory (throw, generated gesture) on the robot's own controllers.
+
+        Arms: each arm's JointTrajectory goes to its trajectory controller, switched in first (as
+        master_gui does; master_controller is gone). Head and grippers: streamed at their times by
+        tick_streams.
+        """
         if not plan.master_trajectory_points:
             return
         self.last_master_trajectory = list(plan.master_trajectory_points)
-        traj_joints = tuple(plan.master_trajectory_joints or (RIGHT_ARM_JOINTS + ("joint_rf",)))
-        arm_joints = tuple(j for j in traj_joints if j.startswith(("joint_la", "joint_ra")))
-        self._arm_traj_joints = arm_joints
-        self._arm_traj_until = time.monotonic() + float(plan.master_trajectory_points[-1][0]) + 0.5
-        final_pt = plan.master_trajectory_points[-1]
-        if final_pt[2] is not None:
-            self.right_gripper_pos = round(float(final_pt[2]), 3)
-        if self.sim_mode:  # no ROS: show the end pose; with ROS, /joint_states reports the real motion
-            self._record_joints(dict(zip(arm_joints, final_pt[1], strict=False)))
+        names = tuple(plan.master_trajectory_joints or (RIGHT_ARM_JOINTS + ("joint_rf",)))
+        rows: list[tuple[float, dict[str, float]]] = []
+        for t_s, q, grip in plan.master_trajectory_points:
+            values = list(q) + ([grip] if grip is not None and len(names) == len(q) + 1 else [])
+            rows.append((max(0.05, float(t_s)), dict(zip(names, (float(v) for v in values)))))
 
-        if self._joint_traj_cls is None or self._joint_traj_point_cls is None:
+        arms = {
+            c: js
+            for c, js in ((LEFT_TRAJ_CONTROLLER, LEFT_ARM_JOINTS), (RIGHT_TRAJ_CONTROLLER, RIGHT_ARM_JOINTS))
+            if all(j in names for j in js)
+        }
+        grippers = [g for g in ("joint_lf", "joint_rf") if g in names]
+        needed = list(arms) + [LEFT_GRIPPER_CONTROLLER if g == "joint_lf" else RIGHT_GRIPPER_CONTROLLER for g in grippers]
+        if needed and self._switcher is not None and not self._switcher.ensure_active(needed):
+            logger.error("Could not switch %s in; trajectory not sent", needed)
             return
 
-        if self._master_traj_pub is not None:
-            master_msg = self._joint_traj_cls()
-            master_msg.joint_names = list(
-                plan.master_trajectory_joints or (RIGHT_ARM_JOINTS + ("joint_rf",))
-            )
-            for t_s, arm_q, grip_q in plan.master_trajectory_points:
-                pt = self._joint_traj_point_cls()
-                sec = int(max(0.0, t_s))
-                nanosec = int(round((max(0.0, t_s) - sec) * 1e9))
-                pt.time_from_start.sec = sec
-                pt.time_from_start.nanosec = nanosec
-                if grip_q is not None and len(master_msg.joint_names) == len(arm_q) + 1:
-                    pt.positions = [float(v) for v in arm_q] + [float(grip_q)]
-                else:
-                    pt.positions = [float(v) for v in arm_q]
-                master_msg.points.append(pt)
-            self._master_traj_pub.publish(master_msg)
+        now = time.monotonic()
+        self._arm_traj_joints = tuple(j for js in arms.values() for j in js)
+        self._arm_traj_until = now + rows[-1][0] + 0.5
+        if self.sim_mode:
+            self._record_joints({j: v for j, v in rows[-1][1].items() if j.startswith(("joint_la", "joint_ra"))})
 
-        # The throw is also sent straight to the right-arm controller; generated gestures go through
-        # master_controller only, since they may use either arm.
-        if self._right_arm_traj_pub is not None and plan.action != "generated_gesture":
-            arm_msg = self._joint_traj_cls()
-            arm_msg.joint_names = list(RIGHT_ARM_JOINTS)
-            for t_s, arm_q, _ in plan.master_trajectory_points:
-                pt = self._joint_traj_point_cls()
-                sec = int(max(0.0, t_s))
-                nanosec = int(round((max(0.0, t_s) - sec) * 1e9))
-                pt.time_from_start.sec = sec
-                pt.time_from_start.nanosec = nanosec
-                pt.positions = [float(v) for v in arm_q]
-                arm_msg.points.append(pt)
-            self._right_arm_traj_pub.publish(arm_msg)
+        if self._joint_traj_cls is not None:
+            for controller, joints in arms.items():
+                msg = self._joint_traj_cls()
+                msg.joint_names = list(joints)
+                for t_s, vals in rows:
+                    pt = self._joint_traj_point_cls()
+                    pt.time_from_start.sec = int(t_s)
+                    pt.time_from_start.nanosec = int(round((t_s - int(t_s)) * 1e9)) % 1_000_000_000
+                    pt.positions = [vals[j] for j in joints]
+                    msg.points.append(pt)
+                self._arm_traj_pubs[controller].publish(msg)
+
+        if any(j in names for j in HEAD_JOINTS):
+            self._head_stream.points = [(now, self._current_head())] + [
+                (now + t_s, (vals.get(HEAD_JOINTS[0]), vals.get(HEAD_JOINTS[1]))) for t_s, vals in rows
+            ]
+        events: list[tuple[float, str, float]] = []
+        for g in grippers:
+            last = None
+            for t_s, vals in rows:
+                if g in vals and vals[g] != last:
+                    events.append((now + t_s, g, vals[g]))
+                    last = vals[g]
+        self._gripper_stream.events = sorted(events)
+
+    def tick_streams(self, now: float | None = None) -> None:
+        """Called every 0.1 s: next head set-point and any gripper command that is due."""
+        now = time.monotonic() if now is None else now
+        sample = self._head_stream.sample(now)
+        if sample is not None:
+            cur_p, cur_y = self._current_head()
+            pitch = cur_p if sample[0] is None else float(sample[0])
+            yaw = cur_y if sample[1] is None else float(sample[1])
+            self._send_head(pitch, yaw)
+        for joint, value in self._gripper_stream.due(now):
+            self.publish_gripper("left" if joint == "joint_lf" else "right", value, 1.0)
 
     def apply_panther_plan(self, plan: PantherActuationPlan) -> None:
         """Dispatch a validated `PantherActuationPlan` across the real UniX AI Panther topics."""
@@ -590,7 +612,15 @@ class ROS2HardwareAdapter:
                 )
             self.publish_master_trajectory(plan)
 
-        if plan.gripper_side is not None and plan.gripper_position is not None:
+        traj_grippers = set(plan.master_trajectory_joints or ()) & {"joint_lf", "joint_rf"}
+        gripper_joint = "joint_rf" if plan.gripper_side == "right" else "joint_lf"
+        if plan.master_trajectory_points and not plan.master_trajectory_joints:
+            traj_grippers.add("joint_rf")  # default throw joints include the right gripper
+        if (
+            plan.gripper_side is not None
+            and plan.gripper_position is not None
+            and gripper_joint not in traj_grippers  # the trajectory times this gripper itself (throw release)
+        ):
             self.publish_gripper(
                 side=plan.gripper_side,
                 position=plan.gripper_position,
@@ -629,6 +659,7 @@ async def run_bridge_loop() -> None:
         while True:
             ros_hw.spin_once()
             now_mono = time.monotonic()
+            ros_hw.tick_streams(now_mono)  # head set-points and timed gripper commands
             safe_twist = supervisor.evaluate_watchdog(now_mono)
             promoted = supervisor.pop_promoted_plan()
             if promoted is not None:

@@ -9,7 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rqt-joint-trajectory-controller \
         ros-humble-canopen-interfaces \
         python3-pykdl \
+        python3-pip \
+        python3-pil \
     && rm -rf /var/lib/apt/lists/*
+
+# Cloud interface bridge (interface/robot_bridge, started with docker/bridge.sh): outbound WebSocket to GCP.
+RUN python3 -m pip install --no-cache-dir "websockets>=14,<16" "pydantic>=2.6,<3"
 
 ENV ROS_DOMAIN_ID=15
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp

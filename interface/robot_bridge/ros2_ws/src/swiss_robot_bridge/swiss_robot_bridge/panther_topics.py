@@ -97,6 +97,7 @@ GRIPPER_MODE_PARALLEL = "parallel"
 GRIPPER_OPEN_POS = 0.0
 GRIPPER_CLOSED_POS = 1.0
 GRIPPER_DEFAULT_VEL = 0.5  # GRIPPER_VEL = 0.5 strokes/s in master_controller.py & joint_check.py
+RIGHT_GRIPPER_MAX = 0.67  # panther_examples/robot.py: master_gui closes the right gripper no further
 
 MAX_ARM_JOINT_VEL_RPS = 0.5  # MAX_JOINT_VEL = 0.5 rad/s in cartesian_follow.py
 

@@ -50,6 +50,16 @@ if [[ -t 0 && -t 1 ]]; then
   tty_args=(-it)
 fi
 
+# Cloud interface bridge settings (docker/bridge.sh): passed through by name only when set on the host,
+# so the token never appears on the docker command line.
+bridge_env=()
+for var in ROBOT_BRIDGE_SHARED_TOKEN ROBOT_GATEWAY_WS_URL ROBOT_ID PANTHER_HEAD_FULL_RANGE PANTHER_HEAD_ORDER \
+           PANTHER_CAMERA_LAUNCH_CMD; do
+  if [[ -n "${!var:-}" ]]; then
+    bridge_env+=(-e "${var}")
+  fi
+done
+
 # The robot's /robot_description loads meshes from its own install path: mount a local copy there for RViz.
 mesh_args=()
 if [[ -d "${HOME}/mh3_description" ]]; then
@@ -60,6 +70,7 @@ exec docker run --rm \
   "${tty_args[@]}" \
   --network host \
   "${ros_env[@]}" \
+  "${bridge_env[@]}" \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e DISPLAY="${DISPLAY:-:0}" \
   -v "${ROOT}:/workspace" \

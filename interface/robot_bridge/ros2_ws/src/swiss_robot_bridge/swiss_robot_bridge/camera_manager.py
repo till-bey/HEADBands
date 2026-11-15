@@ -24,7 +24,9 @@ import time
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc  # datetime.UTC needs Python 3.11; the ROS Humble container has 3.10
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit

@@ -10,6 +10,7 @@ Teaching the UniX AI Panther to throw a frisbee. Everything ROS is Humble, like 
 | `src/unix_msgs` | Vendor `GripperCommand` message |
 | `motion/` | Offline tools and data: `throws/` (phone recordings, curate, view), `to_path/` (recording to Cartesian path), `retarget/` (human arm to joint angles), `example_path.csv` |
 | [`perception/`](perception/README.md) | Frisbee detection: OpenCV detector, Streamlit site, YOLO training |
+| [`interface/`](interface/README.md) | Voice & robotics web UI on GCP (Gemini, ER 2, gestures) and its robot bridge (`docker/bridge.sh`) |
 | `docs/` | Guides and vendor PDFs (below) |
 
 ## Quick start
@@ -58,6 +59,28 @@ Perception:
 ```bash
 cd perception && uv run streamlit run website/app.py
 ```
+
+### Connect the container to the cloud interface (GCP)
+
+The voice & robotics web UI runs on Cloud Run ([`interface/`](interface/README.md),
+https://swiss-voice-backend-1060412536965.europe-west6.run.app). `docker/bridge.sh` starts its robot bridge in the
+Humble container: it dials out over a WebSocket (no port opened), receives only human-confirmed commands, re-checks
+them locally, and drives the robot's own controllers. Rebuild the image once (`--build`) for the bridge's packages.
+
+```bash
+# on the host, once per terminal (needs gcloud logged in to the sandbox project)
+export ROBOT_BRIDGE_SHARED_TOKEN="$(gcloud secrets versions access latest --secret=robot-bridge-shared-token --project=robotcarnival26brn-606)"
+
+docker/run.sh --build docker/bridge.sh    # robot, on the Ethernet cable (domain 15)
+docker/run.sh --sim docker/bridge.sh      # or: the mock sim on this machine (domain 77), with mock_sim running
+```
+
+- Base, lift and grippers use their usual topics. Throws and gestures switch the arm trajectory controllers in for
+  `dual_arm_forward_position_controller` (as `master_gui` does) and leave them in; don't run `master_gui` at the same
+  time. The head is streamed to `head_forward_position_controller` at up to 0.6 rad/s.
+- The head stays in the conservative range (pitch ±0.34, yaw ±1.2 rad) until `PANTHER_HEAD_FULL_RANGE=1` is exported
+  before `docker/run.sh`. Set it only after a small yaw on the robot moved `joint_head1` in `/joint_states`.
+- E-stop in the web UI (or a lost connection) stops the base and freezes any arm motion where it is.
 
 ## Guides
 

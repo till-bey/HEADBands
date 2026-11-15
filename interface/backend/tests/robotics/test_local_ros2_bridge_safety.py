@@ -486,10 +486,21 @@ def test_headbands_clean_up_throw_trajectory_gripper_sentinel_and_detector() -> 
     assert throw_plan.master_trajectory_joints[0] == "joint_ra0"
     assert throw_plan.master_trajectory_joints[-1] == "joint_rf"
     assert len(throw_plan.master_trajectory_points) >= 5
+    import time as _time
+
+    t0 = _time.monotonic()
     hw.apply_panther_plan(throw_plan)
     assert len(hw.last_master_trajectory) == len(throw_plan.master_trajectory_points)
-    assert hw.right_gripper_pos == pytest.approx(0.0)
     assert "joint_ra7" in hw.joint_positions
+    # The gripper follows the trajectory: held closed (capped at 0.67 like master_gui) during the swing,
+    # opened only at the release point, never at the start.
+    hw.tick_streams(t0 + 0.06)
+    assert hw.right_gripper_pos == pytest.approx(0.67)
+    release_t = next(t for t, _q, g in throw_plan.master_trajectory_points if g == 0.0)
+    hw.tick_streams(t0 + release_t - 0.2)
+    assert hw.right_gripper_pos == pytest.approx(0.67)
+    hw.tick_streams(t0 + release_t + 0.1)
+    assert hw.right_gripper_pos == pytest.approx(0.0)
 
     # 3. Classical CPU ground-frisbee ellipse detector (perception/detector/__init__.py)
     rgb = np.zeros((240, 320, 3), dtype=np.uint8)

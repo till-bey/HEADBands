@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc  # datetime.UTC needs Python 3.11; the ROS Humble container has 3.10
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
