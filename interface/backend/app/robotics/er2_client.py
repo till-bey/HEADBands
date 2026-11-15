@@ -77,7 +77,7 @@ You NEVER control motors directly and NEVER emit raw ROS topic paths, shell comm
 Robot hardware capabilities (mapped deterministically downstream by the local ROS 2 safety bridge):
 - Holonomic 4WS mobile base: `move_to` (+x forward, -x backward, +y left strafe, -y right strafe in meters) and `rotate` (`yaw_rad` in [-3.14159, +3.14159] rad).
 - Vertical torso lift: `target.z` in [0.0, 0.80] meters (`LIFT_VEL = 0.05` m/s).
-- 2-DOF pan/tilt head with Orbbec Gemini 2 RGB-D camera: `look_at` or `inspect_object` aims the head camera and captures a frame without wheel motion (`requires_confirmation=false`). `move_head` turns ONLY the head to explicit angles, never the base: `head_yaw_rad` (+ looks left, - looks right, range +-1.48) and `head_pitch_rad` (+ looks down, - looks up, range -0.26 up to +1.41 down); leave an axis null to keep it, both 0.0 = straight ahead (`requires_confirmation=false`). "turn your head left" is `move_head`, NOT `rotate`. `look_at` may also carry head angles to aim precisely (e.g. steeply down at a frisbee near the feet).
+- 2-DOF pan/tilt head with Orbbec Gemini 2 RGB-D camera: `look_at` or `inspect_object` aims the head camera and captures a frame without wheel motion (`requires_confirmation=false`).
 - Dual 8-DOF OpenArm manipulators + parallel grippers (`joint_la0..7`, `joint_ra0..7`, `joint_lf`, `joint_rf` via `/master_controller/joint_trajectory`): `pick_object` closes the gripper to grasp (`requires_confirmation=true`), `place_object` opens the gripper to release (`requires_confirmation=true`), and `throw_object` executes the retargeted right-arm frisbee throw trajectory with automatic gripper release (`requires_confirmation=true`). Mention "left" or "right" in `rationale` when a specific side is requested.
 - Expressive arm gestures with no dedicated action (salute, wave, point at something, raise one or both arms, thumbs-up pose, bow the arms, greet): `generated_gesture` with `object_label` = a short plain-English description of the gesture including which arm (e.g. "salute with the right hand", "wave hello with the right hand", "raise both arms"), `target=null`, `yaw_rad=null`, `speed=0.2`, `requires_confirmation=true`. A downstream planner designs and checks the motion; never describe joint angles.
 
@@ -85,8 +85,8 @@ Given an operator task instruction, current robot status, and optional live Pant
 1. Summarize the task/scene concisely in `scene_summary` (describe visible objects, floor clearance, and distances when a camera image is provided) and note safety observations.
 2. When a camera image is provided, detect relevant objects (frisbees, bottles, obstacles, targets) with normalized [y, x] points and [ymin, xmin, ymax, xmax] boxes in [0, 1000].
 3. Decompose single-step AND multi-step instructions into an ordered sequence of high-level proposals using ONLY:
-   move_to, rotate, look_at, move_head, inspect_object, pick_object, place_object, throw_object, generated_gesture, return_home, stop.
-   Head angles (`head_pitch_rad`, `head_yaw_rad`) are null on every action except move_head, look_at and inspect_object.
+   move_to, rotate, look_at, inspect_object, pick_object, place_object, throw_object, generated_gesture, return_home, stop.
+   Always leave `head_pitch_rad` and `head_yaw_rad` null.
 4. Conventions:
    - move_to: +x = forward (m), -x = backward (m), +y = left (m), -y = right (m), z = torso lift height in [0.0, 0.8] m (default 0.0).
    - rotate: yaw_rad in [-3.14159, +3.14159] (+1.5708 = 90 deg left/CCW, -1.5708 = 90 deg right/CW, 3.14159 = 180 deg turn around).
@@ -125,6 +125,19 @@ class RoboticsReasoningProvider(ABC):
         raise NotImplementedError
 
 
+# Only added to the ER 2 instructions when the operator gave an explicit head command ("look left",
+# "turn your head right", "look down 40 degrees"), detected by the fixed-rule parser. Without it ER 2
+# keeps its earlier behaviour for "look around", "what do you see", "find the frisbee", pick, etc.
+ER2_HEAD_ADDENDUM = """
+EXPLICIT HEAD COMMAND IN THIS INSTRUCTION:
+- `move_head` turns ONLY the head to explicit angles, never the base: `head_yaw_rad` (+ looks left, - looks right,
+  range +-1.48) and `head_pitch_rad` (+ looks down, - looks up, range -0.26 up to +1.41 down); leave an axis null
+  to keep it, both 0.0 = straight ahead, `requires_confirmation=false`. "turn your head left" is `move_head`,
+  NOT `rotate`. Use `move_head` only for the clauses listed under the exact head constraints; head angles stay
+  null on every other step.
+"""
+
+
 def _spec_to_proposal(spec: ExplicitClauseSpec, *, fallback_speed: float | None = None) -> RobotActionProposal:
     act = AllowedActionType(spec.action)
     tgt = (
@@ -144,6 +157,27 @@ def _spec_to_proposal(spec: ExplicitClauseSpec, *, fallback_speed: float | None 
         head_pitch_rad=spec.head_pitch_rad if act == AllowedActionType.MOVE_HEAD else None,
         head_yaw_rad=spec.head_yaw_rad if act == AllowedActionType.MOVE_HEAD else None,
     )
+
+
+def _has_explicit_head(clause_specs: list[ExplicitClauseSpec | None]) -> bool:
+    return any(s is not None and s.action == "move_head" for s in clause_specs)
+
+
+def _restore_pre_head_behaviour(proposals: list[RobotActionProposal]) -> None:
+    """No explicit head command: keep ER 2 to the actions it used before head control existed.
+
+    A move_head becomes the old look_at (head yaw passed as yaw_rad, which the bridge already uses to aim
+    the head), and head angles are cleared everywhere, so "look around", "what do you see" or "pick up the
+    frisbee" plan exactly as before.
+    """
+    for p in proposals:
+        if p.action == AllowedActionType.MOVE_HEAD:
+            p.action = AllowedActionType.LOOK_AT
+            if p.yaw_rad is None and p.head_yaw_rad is not None:
+                p.yaw_rad = p.head_yaw_rad
+            p.requires_confirmation = False
+        p.head_pitch_rad = None
+        p.head_yaw_rad = None
 
 
 def _apply_head_spec(prop: RobotActionProposal, spec: ExplicitClauseSpec) -> None:
@@ -461,8 +495,9 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
         )
         contents.append(prompt)
 
+        explicit_head = _has_explicit_head(clause_specs)
         config = types.GenerateContentConfig(
-            system_instruction=ER2_SYSTEM_INSTRUCTION,
+            system_instruction=ER2_SYSTEM_INSTRUCTION + (ER2_HEAD_ADDENDUM if explicit_head else ""),
             response_mime_type="application/json",
             response_schema=RoboticsReasoningResult,
             temperature=0.1,
@@ -485,6 +520,8 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
             clause_specs,
             has_image=has_image,
         )
+        if not explicit_head:
+            _restore_pre_head_behaviour(parsed.proposals)
         self._sanitize_er2_proposals(parsed.proposals, has_image=has_image)
         parsed.model = self._settings.gemini_robotics_model
         parsed.provider = self.provider_name

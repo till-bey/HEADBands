@@ -168,3 +168,33 @@ def test_bridge_refuses_head_gesture_beyond_conservative_range(bridge) -> None:
         bridge.LocalSafetySupervisor().validate_and_compute_panther_plan(cmd)
     plan = bridge.LocalSafetySupervisor(head_full_range=True).validate_and_compute_panther_plan(cmd)
     assert plan.master_trajectory_joints == ("joint_head0", "joint_head1")
+
+
+# ------------------------------------------------------------------ existing commands keep their behaviour
+@pytest.mark.parametrize(
+    "instruction",
+    ["Look around you.", "What do you see?", "Look around and find the frisbee", "Pick up the frisbee"],
+)
+def test_no_head_addendum_without_an_explicit_head_command(instruction: str) -> None:
+    from app.robotics.er2_client import _has_explicit_head
+
+    assert not _has_explicit_head(GeminiRoboticsER2Client._build_clause_specs(instruction))
+
+
+def test_explicit_head_command_enables_the_addendum() -> None:
+    from app.robotics.er2_client import _has_explicit_head
+
+    assert _has_explicit_head(GeminiRoboticsER2Client._build_clause_specs("look left and then pick up the frisbee"))
+
+
+def test_stray_head_moves_from_er2_become_the_old_look_at() -> None:
+    from app.robotics.er2_client import _restore_pre_head_behaviour
+
+    props = [
+        RobotActionProposal(action=AllowedActionType.MOVE_HEAD, head_yaw_rad=1.0, head_pitch_rad=0.1, speed=0.2),
+        RobotActionProposal(action=AllowedActionType.INSPECT_OBJECT, object_label="bottle", head_pitch_rad=0.3, speed=0.2),
+    ]
+    _restore_pre_head_behaviour(props)
+    assert [p.action for p in props] == [AllowedActionType.LOOK_AT, AllowedActionType.INSPECT_OBJECT]
+    assert props[0].yaw_rad == 1.0
+    assert all(p.head_pitch_rad is None and p.head_yaw_rad is None for p in props)
