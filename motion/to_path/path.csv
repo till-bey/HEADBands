@@ -1,4 +1,4 @@
-# t,x,y,z,roll,pitch,yaw  (s, m, rad) of link_rf in body_link, for --arm right --max-joint-vel 1.48: example_1, x0.1 in size, x1.4 slower, starting at (0.35, 0.0, 1.0) m in base_footprint, joint margin 0.025 rad
+# t,x,y,z,roll,pitch,yaw  (s, m, rad) of link_rf in body_link, for --arm right --max-joint-vel 1.48: to_path, x0.1 in size, x1.4 slower, starting at (0.35, 0.0, 1.0) m in base_footprint, joint margin 0.025 rad
 # flick +20 to -20 deg about body z over the last 55%, release at t=0.967s, then 0.2s slow-down to -35 deg
 # start_joints: 0.744629 -0.146407 -0.743916 1.382332 -1.635231 -1.907871 0.621867 -0.050556
 0.00000,0.15997,-0.00000,-0.36320,1.57080,0.00000,0.34907
