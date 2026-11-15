@@ -22,8 +22,9 @@ from app.robotics.action_schema import (
 # Rule 1 & 2: Patterns indicative of code injection or direct ROS topic injection
 _FORBIDDEN_CODE_OR_TOPIC_RE = re.compile(
     r"(;|&&|\|\||`|\$\(|__import__|eval\s*\(|exec\s*\(|subprocess|os\.system"
-    r"|/cmd_vel|/preempt_teleop|/head_forward_position_controller|/lifting_controller"
-    r"|/left_gripper|/right_gripper|/joint_trajectory|/camera/color/image_raw|ros2\s+topic)",
+    r"|/cmd_vel|/preempt_teleop|/master_controller/joint_trajectory|/dual_arm_forward_position_controller"
+    r"|/head_forward_position_controller|/lifting_controller|/cartesian_follow/planned_path"
+    r"|/left_gripper|/right_gripper|/joint_trajectory|/camera/color/image_raw|/can0/|/can1/|ros2\s+topic)",
     re.IGNORECASE,
 )
 
@@ -75,7 +76,11 @@ class ActionSafetyValidator:
         if proposal.action == AllowedActionType.ROTATE and proposal.yaw_rad is None:
             raise SafetyValidationError("Action 'rotate' requires 'yaw_rad'.")
 
-        if proposal.action in {AllowedActionType.PICK_OBJECT, AllowedActionType.INSPECT_OBJECT}:
+        if proposal.action in {
+            AllowedActionType.PICK_OBJECT,
+            AllowedActionType.INSPECT_OBJECT,
+            AllowedActionType.THROW_OBJECT,
+        }:
             if not proposal.object_label and proposal.target is None:
                 raise SafetyValidationError(f"Action '{proposal.action}' requires 'object_label' or 'target'.")
 

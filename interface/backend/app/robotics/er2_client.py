@@ -75,17 +75,17 @@ ER2_SYSTEM_INSTRUCTION = """You are the Embodied Spatial & Task Planning Engine 
 You NEVER control motors directly and NEVER emit raw ROS topic paths, shell commands, semicolons, or executable code.
 Robot hardware capabilities (mapped deterministically downstream by the local ROS 2 safety bridge):
 - Holonomic 4WS mobile base: `move_to` (+x forward, -x backward, +y left strafe, -y right strafe in meters) and `rotate` (`yaw_rad` in [-3.14159, +3.14159] rad).
-- Vertical torso lift: `target.z` in [0.0, 0.60] meters.
+- Vertical torso lift: `target.z` in [0.0, 0.80] meters (`LIFT_VEL = 0.05` m/s).
 - 2-DOF pan/tilt head with Orbbec Gemini 2 RGB-D camera: `look_at` or `inspect_object` aims the head camera and captures a frame without wheel motion (`requires_confirmation=false`).
-- Dual parallel grippers (left and right): `pick_object` closes the gripper to grasp (`requires_confirmation=true`), `place_object` opens the gripper to release (`requires_confirmation=true`). Mention "left" or "right" in `rationale` when a specific side is requested.
+- Dual 8-DOF OpenArm manipulators + parallel grippers (`joint_la0..7`, `joint_ra0..7`, `joint_lf`, `joint_rf` via `/master_controller/joint_trajectory`): `pick_object` closes the gripper to grasp (`requires_confirmation=true`), `place_object` opens the gripper to release (`requires_confirmation=true`), and `throw_object` executes the retargeted right-arm frisbee throw trajectory with automatic gripper release (`requires_confirmation=true`). Mention "left" or "right" in `rationale` when a specific side is requested.
 
 Given an operator task instruction, current robot status, and optional live Panther camera image:
 1. Summarize the task/scene concisely in `scene_summary` (describe visible objects, floor clearance, and distances when a camera image is provided) and note safety observations.
 2. When a camera image is provided, detect relevant objects (frisbees, bottles, obstacles, targets) with normalized [y, x] points and [ymin, xmin, ymax, xmax] boxes in [0, 1000].
 3. Decompose single-step AND multi-step instructions into an ordered sequence of high-level proposals using ONLY:
-   move_to, rotate, look_at, inspect_object, pick_object, place_object, return_home, stop.
+   move_to, rotate, look_at, inspect_object, pick_object, place_object, throw_object, return_home, stop.
 4. Conventions:
-   - move_to: +x = forward (m), -x = backward (m), +y = left (m), -y = right (m), z = torso lift height in [0.0, 0.6] m (default 0.0).
+   - move_to: +x = forward (m), -x = backward (m), +y = left (m), -y = right (m), z = torso lift height in [0.0, 0.8] m (default 0.0).
    - rotate: yaw_rad in [-3.14159, +3.14159] (+1.5708 = 90 deg left/CCW, -1.5708 = 90 deg right/CW, 3.14159 = 180 deg turn around).
    - return_home: target=(0.0, 0.0, 0.0).
    - speed: conservative in [0.1, 0.35] m/s (0.0 for stop).
@@ -134,7 +134,7 @@ def _spec_to_proposal(spec: ExplicitClauseSpec, *, fallback_speed: float | None 
         action=act,
         target=tgt,
         yaw_rad=spec.yaw_rad if act == AllowedActionType.ROTATE else None,
-        object_label=None,
+        object_label="frisbee" if act == AllowedActionType.THROW_OBJECT else None,
         speed=spd,
         requires_confirmation=(act != AllowedActionType.STOP),
         rationale=spec.rationale,
@@ -204,6 +204,11 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                 )
             elif spec.action == "stop":
                 lines.append(f'- Clause {idx + 1} ("{spec.clause}"): action=stop, speed=0.0')
+            elif spec.action == "throw_object":
+                lines.append(
+                    f'- Clause {idx + 1} ("{spec.clause}"): action=throw_object, object_label=frisbee, '
+                    "its own separate step (after pick_object when the frisbee is picked up first); never merge or drop it"
+                )
         if not lines:
             return ""
         return (
@@ -240,6 +245,8 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                     elif spec.action == "rotate" and spec.yaw_rad is not None:
                         if spec.has_explicit_number or prop.yaw_rad is None:
                             prop.yaw_rad = spec.yaw_rad
+                    elif spec.action == "throw_object" and not prop.object_label:
+                        prop.object_label = "frisbee"
                 return proposals
 
             # ER 2 merged, dropped, or artificially subdivided steps on a pure blind instruction -> restore exact steps
@@ -262,6 +269,7 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
 
         prop_cursor = 0
         for spec in explicit_specs:
+            matched = False
             for j in range(prop_cursor, len(proposals)):
                 prop = proposals[j]
                 if prop.action.value != spec.action:
@@ -278,8 +286,21 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                     prop.object_label = None
                 elif spec.action == "rotate" and spec.yaw_rad is not None:
                     prop.yaw_rad = spec.yaw_rad
+                elif spec.action == "throw_object" and not prop.object_label:
+                    prop.object_label = "frisbee"
                 prop_cursor = j + 1
+                matched = True
                 break
+            if not matched and spec.action == "throw_object":
+                # ER 2 merged or dropped an explicit throw: restore it right after the pick (or at the end),
+                # so it still reaches the human confirmation queue instead of silently disappearing.
+                picks = [
+                    i for i in range(prop_cursor, len(proposals))
+                    if proposals[i].action == AllowedActionType.PICK_OBJECT
+                ]
+                insert_at = picks[0] + 1 if picks else len(proposals)
+                proposals.insert(insert_at, _spec_to_proposal(spec))
+                prop_cursor = insert_at + 1
         return proposals
 
     def _sanitize_er2_proposals(
@@ -320,9 +341,15 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
             elif proposal.action == AllowedActionType.ROTATE:
                 proposal.target = None
                 proposal.object_label = None
-            elif proposal.action in {AllowedActionType.INSPECT_OBJECT, AllowedActionType.PICK_OBJECT}:
+            elif proposal.action in {
+                AllowedActionType.INSPECT_OBJECT,
+                AllowedActionType.PICK_OBJECT,
+                AllowedActionType.THROW_OBJECT,
+            }:
                 if not proposal.object_label and proposal.target is None:
-                    proposal.object_label = "workspace_target"
+                    proposal.object_label = (
+                        "frisbee" if proposal.action == AllowedActionType.THROW_OBJECT else "workspace_target"
+                    )
 
             if proposal.yaw_rad is not None and math.isfinite(proposal.yaw_rad):
                 if 3.2 < abs(proposal.yaw_rad) <= 360.0:
@@ -469,6 +496,7 @@ class MockRoboticsER2Client(RoboticsReasoningProvider):
                             action=act,
                             target=tgt,
                             yaw_rad=float(args["yaw_rad"]) if args.get("yaw_rad") is not None else None,
+                            object_label=str(args["object_label"]) if args.get("object_label") else None,
                             speed=float(args.get("speed", 0.2)),
                             requires_confirmation=(act != AllowedActionType.STOP),
                             rationale=str(args.get("rationale", clause)),

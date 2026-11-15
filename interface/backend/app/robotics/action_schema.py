@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 DEFAULT_PANTHER_ACTIVE_TOPICS: tuple[str, ...] = (
     "/cmd_vel",
     "/preempt_teleop",
+    "/master_controller/joint_trajectory",
     "/head_forward_position_controller/commands",
     "/lifting_controller/commands",
     "/left_gripper/gripper_command",
@@ -28,6 +29,7 @@ class AllowedActionType(StrEnum):
     INSPECT_OBJECT = "inspect_object"
     PICK_OBJECT = "pick_object"
     PLACE_OBJECT = "place_object"
+    THROW_OBJECT = "throw_object"
     RETURN_HOME = "return_home"
     STOP = "stop"
 
@@ -38,6 +40,7 @@ DANGEROUS_ACTIONS_REQUIRING_CONFIRMATION: frozenset[AllowedActionType] = frozens
         AllowedActionType.ROTATE,
         AllowedActionType.PICK_OBJECT,
         AllowedActionType.PLACE_OBJECT,
+        AllowedActionType.THROW_OBJECT,
         AllowedActionType.RETURN_HOME,
     }
 )
@@ -62,7 +65,7 @@ class Target3D(BaseModel):
 
     x: float = Field(description="Forward/backward position in meters relative to safe origin.")
     y: float = Field(description="Left/right position in meters relative to safe origin.")
-    z: float = Field(default=0.0, description="Vertical height in meters (>= 0; Panther lift [0, 0.6]m).")
+    z: float = Field(default=0.0, description="Vertical height in meters (>= 0; Panther lift [0, 0.8]m).")
 
 
 class DetectedObject2D(BaseModel):

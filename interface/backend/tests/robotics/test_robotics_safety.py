@@ -569,3 +569,54 @@ async def test_er2_client_enforces_exact_5m_precision_and_strips_spurious_fields
     assert pv.target.y == pytest.approx(-0.28)
     assert pv.object_label == "orange_frisbee"
     assert pv.yaw_rad is None
+
+
+def test_headbands_clean_up_throw_frisbee_and_0_8m_lift_across_7_languages() -> None:
+    from app.robotics.action_schema import DEFAULT_PANTHER_ACTIVE_TOPICS
+    from app.robotics.intent_parser import format_er2_plan_summary
+
+    assert "/master_controller/joint_trajectory" in DEFAULT_PANTHER_ACTIVE_TOPICS
+
+    throw_cases = [
+        ("Throw the frisbee", "en-US"),
+        ("Wirf die Frisbee", "de-DE"),
+        ("Rüehr s Frisbee", "gsw"),
+        ("Lance le frisbee", "fr-FR"),
+        ("Lanza el frisbee", "es-ES"),
+        ("Hoď frisbee", "cs-CZ"),
+        ("把飞盘扔出去", "zh-CN"),
+    ]
+    for phrase, lang in throw_cases:
+        parsed = parse_multilingual_robot_intent(phrase, lang)
+        assert parsed is not None, f"Failed to parse throw command: {phrase!r} ({lang})"
+        tool_name, args = parsed
+        assert tool_name == "propose_robot_action"
+        assert args["action"] == "throw_object"
+        assert args["object_label"] == "frisbee"
+
+        summary = format_er2_plan_summary(
+            [
+                {
+                    "action": "throw_object",
+                    "object_label": "frisbee",
+                    "requires_confirmation": True,
+                }
+            ],
+            [],
+            lang,
+        )
+        assert "frisbee" in summary.lower() or "飞盘" in summary or "飛盤" in summary
+
+    # Verify clean_up 0.80m lift ceiling is allowed by ActionSafetyValidator
+    validator = _make_validator()
+    lift_p = validator.parse_and_validate_proposal(
+        RobotActionProposal(
+            action=AllowedActionType.MOVE_TO,
+            target=Target3D(x=0.0, y=0.0, z=0.75),
+            speed=0.05,
+        ),
+        RobotStatus(),
+    )
+    assert lift_p.target is not None
+    assert lift_p.target.z == pytest.approx(0.75)
+

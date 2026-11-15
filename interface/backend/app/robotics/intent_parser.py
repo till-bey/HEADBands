@@ -31,20 +31,20 @@ _LOOK_FORWARD_IDIOM_RE = re.compile(
 _CAMERA_TRIGGER_RE = re.compile(
     r"(\b(camera|photo|picture|snapshot|image|video|frisbee|disc|bottle|cup|mug|box|ball|obstacle|obstacles"
     r"|object|item|inspect\w*|scan\w*|look\w*|see|seeing|spot|find\w*|locat\w*|search\w*|pick\w*|grab\w*"
-    r"|grasp\w*|grip\w*|plac\w*|put\s+down|drop\w*|releas\w*|where\s+is|what\s+(?:do\s+you\s+see|is\s+in\s+front)"
-    r"|path\s+clear)\b"
+    r"|grasp\w*|grip\w*|plac\w*|put\s+down|drop\w*|releas\w*|throw\w*|toss\w*|fling\w*"
+    r"|where\s+is|what\s+(?:do\s+you\s+see|is\s+in\s+front)|path\s+clear)\b"
     r"|\b(kamera\w*|foto\w*|bild\w*|scheibe|flasche|kiste|hindernis\w*|objekt\w*|gegenstand|schau\w*"
     r"|sieh\w*|guck\w*|lueg\w*|gseh\w*|prüf\w*|pruef\w*|inspezier\w*|such\w*|suech\w*|find\w*"
-    r"|greif\w*|heb\w*|nimm\w*|aufheb\w*|ableg\w*|stell\w*|weg\s+frei)\b"
+    r"|greif\w*|heb\w*|nimm\w*|aufheb\w*|ableg\w*|stell\w*|werf\w*|wirf\w*|rüehr\w*|weg\s+frei)\b"
     r"|\b(cam[ée]ra|bouteille|disque|objet|regarde\w*|vois|voir|inspecte\w*|cherche\w*|trouve\w*"
-    r"|attrape\w*|prends|prendre|saisis\w*|pose\w*|rel[âa]che\w*|o[ùu]\s+est)\b"
+    r"|attrape\w*|prends|prendre|saisis\w*|pose\w*|rel[âa]che\w*|lance\w*|jette\w*|o[ùu]\s+est)\b"
     r"|\b(c[áa]mara|botella|disco|objeto|obst[áa]culo\w*|mira\w*|ves\b|ver\b|inspeccion\w*|revisa\w*"
-    r"|busca\w*|encuentra\w*|agarra\w*|recoge\w*|toma\w*|suelta\w*|coloca\w*|d[óo]nde\s+est[áa])\b"
+    r"|busca\w*|encuentra\w*|agarra\w*|recoge\w*|toma\w*|suelta\w*|coloca\w*|lanza\w*|tira\w*|arroja\w*|d[óo]nde\s+est[áa])\b"
     r"|\b(kamer\w*|fotk\w*|sn[íi]mek|tal[íi][řr]|l[áa]hev|lahev|p[řr]ek[áa][žz]k\w*|p[řr]edm[ěe]t\w*"
     r"|pod[íi]vej\w*|koukni\w*|vid[íi][šs]|zkontroluj\w*|prohl[ée]dni\w*|prohledni\w*|najdi\w*|hledej\w*"
-    r"|uchop\w*|seber\w*|vezmi\w*|polo[žz]\w*|pus[ťt]\w*|kde\s+je)\b"
+    r"|uchop\w*|seber\w*|vezmi\w*|polo[žz]\w*|pus[ťt]\w*|ho[ďd]\w*|h[áa]zej\w*|kde\s+je)\b"
     r"|(相机|相機|摄像头|攝像頭|拍照|照片|画面|畫面|飞盘|飛盤|瓶|杯|箱|障碍|障礙|物体|物體"
-    r"|查看|检查|檢查|观察|觀察|看看|看到|看见|看見|寻找|尋找|找一?下|在哪|抓|拿|捡|撿|放下|松开|鬆開))",
+    r"|查看|检查|檢查|观察|觀察|看看|看到|看见|看見|寻找|尋找|找一?下|在哪|抓|拿|捡|撿|放下|松开|鬆開|扔|投掷|投擲|抛|拋))",
     re.IGNORECASE,
 )
 
@@ -53,16 +53,18 @@ _ROBOT_VISION_FALLBACK_RE = re.compile(
     r"(\b(what\s+(?:do|can)\s+you\s+see|check\s+the\s+(?:camera|workspace|floor|path)|trigger\s+the\s+camera"
     r"|use\s+the\s+camera|look\s+(?:around|at\s+the|for\s+the)|inspect\s+the|scan\s+the\s+(?:room|floor|workspace)"
     r"|find\s+the\s+(?:frisbee|disc|bottle|object|cup|box|ball)|where\s+is\s+the\s+(?:frisbee|disc|bottle|object)"
-    r"|pick\s+up\s+the|grab\s+the|grasp\s+the|place\s+the|put\s+down\s+the)\b"
+    r"|pick\s+up\s+the|grab\s+the|grasp\s+the|place\s+the|put\s+down\s+the|throw\s+the\s+(?:frisbee|disc)|toss\s+the\s+(?:frisbee|disc))\b"
     r"|\b(was\s+siehst\s+du|was\s+gsehsch|schau\s+(?:dich\s+um|nach)|lueg\s+(?:ume|mal)|kamera\s+(?:prüfen|aktivieren|starten)"
-    r"|such\w*\s+(?:das|den|die|s|d)\s+(?:frisbee|flasche|scheibe|objekt)|heb\w*\s+.*\bauf|greif\w*\s+(?:das|die|den))\b"
+    r"|such\w*\s+(?:das|den|die|s|d)\s+(?:frisbee|flasche|scheibe|objekt)|heb\w*\s+.*\bauf|greif\w*\s+(?:das|die|den)"
+    r"|(?:wirf|werf\w*|rüehr\w*)\s+(?:das|die|s|d)?\s*(?:frisbee|scheibe))\b"
     r"|\b(que\s+vois-tu|qu'est-ce\s+que\s+tu\s+vois|regarde\s+autour|inspecte\s+la|cherche\s+le\s+frisbee"
-    r"|attrape\s+la|pose\s+le|pose\s+la)\b"
-    r"|\b(qu[ée]\s+ves\b|mira\s+alrededor|busca\s+el\s+frisbee|inspecciona\s+el|recoge\s+la|agarra\s+el|agarra\s+la)\b"
+    r"|attrape\s+la|pose\s+le|pose\s+la|lance\w*\s+(?:le\s+|la\s+)?(?:frisbee|disque))\b"
+    r"|\b(qu[ée]\s+ves\b|mira\s+alrededor|busca\s+el\s+frisbee|inspecciona\s+el|recoge\s+la|agarra\s+el|agarra\s+la"
+    r"|lanza\w*\s+(?:el\s+|la\s+)?(?:frisbee|disco))\b"
     r"|\b(co\s+(?:te[ďd]\s+)?vid[íi][šs]|pod[íi]vej\s+se\s+kolem|najdi\s+frisbee|zkontroluj\s+(?:prostor|kameru)"
-    r"|uchop\s+|seber\s+|polo[žz]\s+)\b"
+    r"|uchop\s+|seber\s+|polo[žz]\s+|ho[ďd]\w*\s+(?:to\s+)?(?:frisbee|tal[íi][řr]))\b"
     r"|(你(?:现在|現在)?看(?:到|见|見)什么|你(?:现在|現在)?看(?:到|见|見)什麼|看看周围|看看周圍|打开相机|打開相機|打开摄像头|打開攝像頭"
-    r"|找一?下飞盘|找一?下飛盤|抓起|捡起|撿起|把.*放下))",
+    r"|找一?下飞盘|找一?下飛盤|抓起|捡起|撿起|把.*放下|扔飞盘|扔飛盤|把飞盘扔|把飛盤扔|投掷飞盘|投擲飛盤))",
     re.IGNORECASE,
 )
 
@@ -222,6 +224,16 @@ _STRAFE_RIGHT_RE = re.compile(
 
 _TORSO_LIFT_RE = re.compile(
     r"\b(raise|lift|elevate|lower|set)\s+(?:the\s+)?(?:robot(?:'s)?\s+|panther(?:'s)?\s+)?(torso|lift(?:\s+column)?|mast|body\s+height)\b",
+    re.IGNORECASE,
+)
+
+_THROW_OBJECT_RE = re.compile(
+    r"(\b(throw|toss|fling|hurl)\b[^.!?;]{0,25}\b(frisbee|disc|object|it)\b"
+    r"|\b(wirf\w*|werf\w*|rüehr\w*)\b[^.!?;]{0,25}\b(frisbee|scheibe|es|sie|ihn|s|en)\b"
+    r"|\b(lance\w*|jette\w*)\b[^.!?;]{0,25}\b(frisbee|disque)\b"
+    r"|\b(lanza\w*|tira\w*|arroja\w*)\b[^.!?;]{0,25}\b(frisbee|disco)\b"
+    r"|\b(ho[ďd]\w*|h[áa]zej\w*)\b[^.!?;]{0,25}\b(frisbee|tal[íi][řr])\b"
+    r"|(扔飞盘|扔飛盤|把飞盘扔|把飛盤扔|投掷飞盘|投擲飛盤|抛出飞盘|拋出飛盤))",
     re.IGNORECASE,
 )
 
@@ -594,9 +606,9 @@ def parse_explicit_clause_spec(text: str, language: str = "auto") -> ExplicitCla
     m_lift = _TORSO_LIFT_RE.search(cleaned)
     if m_lift:
         verb = m_lift.group(1).lower()
-        default_z = 0.0 if verb == "lower" else 0.30
+        default_z = 0.0 if verb == "lower" else 0.40
         raw_z, has_num = _extract_distance_meters(cleaned, default=default_z)
-        z_m = round(min(max(raw_z, 0.0), 0.60), 4)
+        z_m = round(min(max(raw_z, 0.0), 0.80), 4)
         return ExplicitClauseSpec(
             clause=cleaned,
             action="move_to",
@@ -606,6 +618,15 @@ def parse_explicit_clause_spec(text: str, language: str = "auto") -> ExplicitCla
             speed=0.15,
             has_explicit_number=has_num or verb == "lower",
             rationale=f"Set Panther torso lift z={z_m:g}m ({language}): {cleaned[:120]}",
+        )
+
+    if _THROW_OBJECT_RE.search(cleaned):
+        return ExplicitClauseSpec(
+            clause=cleaned,
+            action="throw_object",
+            speed=0.25,
+            has_explicit_number=True,
+            rationale=f"Execute retargeted right-arm frisbee throw trajectory ({language}): {cleaned[:120]}",
         )
 
     if _ROTATE_RE.search(cleaned):
@@ -719,9 +740,9 @@ def parse_multilingual_robot_intent(text: str, language: str = "auto") -> tuple[
     m_lift = _TORSO_LIFT_RE.search(cleaned)
     if m_lift:
         verb = m_lift.group(1).lower()
-        default_z = 0.0 if verb == "lower" else 0.30
+        default_z = 0.0 if verb == "lower" else 0.40
         raw_z, _ = _extract_distance_meters(cleaned, default=default_z)
-        z_m = round(min(max(raw_z, 0.0), 0.60), 4)
+        z_m = round(min(max(raw_z, 0.0), 0.80), 4)
         return "propose_robot_action", {
             "action": "move_to",
             "x": 0.0,
@@ -729,6 +750,15 @@ def parse_multilingual_robot_intent(text: str, language: str = "auto") -> tuple[
             "z": z_m,
             "speed": 0.15,
             "rationale": f"Set Panther torso lift z={z_m:g}m ({language}): {cleaned[:120]}",
+        }
+
+    # 3c. Retargeted Frisbee Throw (`throw_object` on `/master_controller/joint_trajectory`)
+    if _THROW_OBJECT_RE.search(cleaned):
+        return "propose_robot_action", {
+            "action": "throw_object",
+            "object_label": "frisbee",
+            "speed": 0.25,
+            "rationale": f"Execute retargeted right-arm frisbee throw trajectory ({language}): {cleaned[:120]}",
         }
 
     # 4. Rotation (check before left/right translation so "turn left" maps to rotate, not strafe)
@@ -1383,6 +1413,24 @@ def _describe_single_step(cmd: dict[str, Any], language: str) -> str:
         if is_gsw:
             return f"{tgt_name} mit em Griifer ablege"
         return f"{tgt_name} mit dem Greifer ablegen"
+
+    if action == "throw_object":
+        tgt_name = obj or "frisbee"
+        if is_zh_tw:
+            return f"用右機械臂投擲 {tgt_name}"
+        if is_zh:
+            return f"用右机械臂投掷 {tgt_name}"
+        if is_es:
+            return f"lanzar {tgt_name} con el brazo derecho"
+        if is_cs:
+            return f"hodit {tgt_name} pravým ramenem"
+        if is_fr:
+            return f"lancer {tgt_name} avec le bras droit"
+        if is_en:
+            return f"throw {tgt_name} with right arm trajectory"
+        if is_gsw:
+            return f"{tgt_name} mit em rächte Arm rüehre"
+        return f"{tgt_name} mit dem rechten Arm werfen"
 
     label_part = f" ({obj})" if obj else ""
     return f"{action}{label_part}"

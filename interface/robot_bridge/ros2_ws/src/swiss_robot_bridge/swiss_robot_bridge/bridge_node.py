@@ -24,6 +24,7 @@ from swiss_robot_bridge.panther_topics import (
     PANTHER_COMMAND_TOPICS,
     PANTHER_RMW_IMPLEMENTATION,
     PANTHER_ROS_DOMAIN_ID,
+    RIGHT_ARM_JOINTS,
     SRV_ULTRASONIC_SWITCH,
     TOPIC_BATTERY_STATE,
     TOPIC_CAMERA_COLOR_COMPRESSED,
@@ -38,12 +39,15 @@ from swiss_robot_bridge.panther_topics import (
     TOPIC_LEFT_GRIPPER_STATES,
     TOPIC_LIFT_COMMANDS,
     TOPIC_LIFT_STATES,
+    TOPIC_MASTER_TRAJ,
     TOPIC_ODOM,
     TOPIC_POSE,
     TOPIC_PREEMPT_TELEOP,
+    TOPIC_RIGHT_ARM_TRAJ,
     TOPIC_RIGHT_GRIPPER_CMD,
     TOPIC_RIGHT_GRIPPER_STATES,
     TOPIC_SIM_FRONT_SCAN,
+    single_position,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -66,6 +70,8 @@ class ROS2HardwareAdapter:
         # Publishers
         self._cmd_vel_pub: Any = None
         self._preempt_pub: Any = None
+        self._master_traj_pub: Any = None
+        self._right_arm_traj_pub: Any = None
         self._head_pub: Any = None
         self._lift_pub: Any = None
         self._left_gripper_pub: Any = None
@@ -80,6 +86,8 @@ class ROS2HardwareAdapter:
         self._empty_cls: Any = None
         self._f64_multi_cls: Any = None
         self._joint_state_cls: Any = None
+        self._joint_traj_cls: Any = None
+        self._joint_traj_point_cls: Any = None
         self._gripper_cmd_cls: Any = None
         self._set_bool_cls: Any = None
         self._image_cls: Any = None
@@ -94,6 +102,7 @@ class ROS2HardwareAdapter:
         self.left_gripper_pos: float | None = None
         self.right_gripper_pos: float | None = None
         self.head_joints_rad: list[float] | None = None
+        self.last_master_trajectory: list[tuple[float, tuple[float, ...], float | None]] = []
         self.last_published_topics: list[str] = list(PANTHER_COMMAND_TOPICS)
         # Every joint position seen on the state topics, for the Web UI simulation view (read-only).
         # The lift and gripper state topics have no joint names on the robot, so they are stored
@@ -112,6 +121,7 @@ class ROS2HardwareAdapter:
             from sensor_msgs.msg import BatteryState, CompressedImage, Image, JointState, LaserScan
             from std_msgs.msg import Empty, Float64MultiArray
             from std_srvs.srv import SetBool
+            from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
             if not rclpy.ok():
                 rclpy.init()
@@ -123,13 +133,21 @@ class ROS2HardwareAdapter:
             self._empty_cls = Empty
             self._f64_multi_cls = Float64MultiArray
             self._joint_state_cls = JointState
+            self._joint_traj_cls = JointTrajectory
+            self._joint_traj_point_cls = JointTrajectoryPoint
             self._set_bool_cls = SetBool
             self._image_cls = Image
             self._compressed_image_cls = CompressedImage
 
-            # Core Panther command publishers (active at boot on Panther)
+            # Core Panther command publishers (active at boot on Panther + master_controller)
             self._cmd_vel_pub = self._node.create_publisher(Twist, TOPIC_CMD_VEL, 10)
             self._preempt_pub = self._node.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
+            self._master_traj_pub = self._node.create_publisher(
+                JointTrajectory, TOPIC_MASTER_TRAJ, 10
+            )
+            self._right_arm_traj_pub = self._node.create_publisher(
+                JointTrajectory, TOPIC_RIGHT_ARM_TRAJ, 10
+            )
             self._head_pub = self._node.create_publisher(Float64MultiArray, TOPIC_HEAD_COMMANDS, 10)
             self._lift_pub = self._node.create_publisher(JointState, TOPIC_LIFT_COMMANDS, 10)
 
@@ -302,11 +320,11 @@ class ROS2HardwareAdapter:
         positions = list(getattr(msg, "position", []))
         name_to_pos = dict(zip(names, positions, strict=False))
         self._record_joints(name_to_pos)
-        if "body_joint" in name_to_pos:
+        if "body_joint" in name_to_pos and float(name_to_pos["body_joint"]) > -1.0:
             self.lift_height_m = round(float(name_to_pos["body_joint"]), 4)
-        if "joint_lf" in name_to_pos:
+        if "joint_lf" in name_to_pos and float(name_to_pos["joint_lf"]) > -1.0:
             self.left_gripper_pos = round(float(name_to_pos["joint_lf"]), 3)
-        if "joint_rf" in name_to_pos:
+        if "joint_rf" in name_to_pos and float(name_to_pos["joint_rf"]) > -1.0:
             self.right_gripper_pos = round(float(name_to_pos["joint_rf"]), 3)
         if "joint_head0" in name_to_pos and "joint_head1" in name_to_pos:
             self.head_joints_rad = [
@@ -315,22 +333,22 @@ class ROS2HardwareAdapter:
             ]
 
     def _on_lift_state(self, msg: Any) -> None:
-        positions = list(getattr(msg, "position", []))
-        if positions:
-            self.lift_height_m = round(float(positions[0]), 4)
-            self._record_joints({"body_joint": positions[0]})
+        pos = single_position(msg)
+        if pos is not None:
+            self.lift_height_m = round(pos, 4)
+            self._record_joints({"body_joint": pos})
 
     def _on_left_gripper_state(self, msg: Any) -> None:
-        positions = list(getattr(msg, "position", []))
-        if positions:
-            self.left_gripper_pos = round(float(positions[0]), 3)
-            self._record_joints({"joint_lf": positions[0]})
+        pos = single_position(msg)
+        if pos is not None:
+            self.left_gripper_pos = round(pos, 3)
+            self._record_joints({"joint_lf": pos})
 
     def _on_right_gripper_state(self, msg: Any) -> None:
-        positions = list(getattr(msg, "position", []))
-        if positions:
-            self.right_gripper_pos = round(float(positions[0]), 3)
-            self._record_joints({"joint_rf": positions[0]})
+        pos = single_position(msg)
+        if pos is not None:
+            self.right_gripper_pos = round(pos, 3)
+            self._record_joints({"joint_rf": pos})
 
     def _on_front_scan(self, msg: Any) -> None:
         """Compute closest valid front-arc obstacle distance from `/scan` (`link_front_radar`)."""
@@ -408,6 +426,50 @@ class ROS2HardwareAdapter:
             msg.command.velocity = [float(velocity)]
             pub.publish(msg)
 
+    def publish_master_trajectory(self, plan: PantherActuationPlan) -> None:
+        """Publish whole-upper-body trajectory to `/master_controller/joint_trajectory` (and right-arm trajectory)."""
+        if not plan.master_trajectory_points:
+            return
+        self.last_master_trajectory = list(plan.master_trajectory_points)
+        final_pt = plan.master_trajectory_points[-1]
+        if final_pt[2] is not None:
+            self.right_gripper_pos = round(float(final_pt[2]), 3)
+        self._record_joints(dict(zip(RIGHT_ARM_JOINTS, final_pt[1], strict=False)))
+
+        if self._joint_traj_cls is None or self._joint_traj_point_cls is None:
+            return
+
+        if self._master_traj_pub is not None:
+            master_msg = self._joint_traj_cls()
+            master_msg.joint_names = list(
+                plan.master_trajectory_joints or (RIGHT_ARM_JOINTS + ("joint_rf",))
+            )
+            for t_s, arm_q, grip_q in plan.master_trajectory_points:
+                pt = self._joint_traj_point_cls()
+                sec = int(max(0.0, t_s))
+                nanosec = int(round((max(0.0, t_s) - sec) * 1e9))
+                pt.time_from_start.sec = sec
+                pt.time_from_start.nanosec = nanosec
+                if grip_q is not None and len(master_msg.joint_names) == len(arm_q) + 1:
+                    pt.positions = [float(v) for v in arm_q] + [float(grip_q)]
+                else:
+                    pt.positions = [float(v) for v in arm_q]
+                master_msg.points.append(pt)
+            self._master_traj_pub.publish(master_msg)
+
+        if self._right_arm_traj_pub is not None:
+            arm_msg = self._joint_traj_cls()
+            arm_msg.joint_names = list(RIGHT_ARM_JOINTS)
+            for t_s, arm_q, _ in plan.master_trajectory_points:
+                pt = self._joint_traj_point_cls()
+                sec = int(max(0.0, t_s))
+                nanosec = int(round((max(0.0, t_s) - sec) * 1e9))
+                pt.time_from_start.sec = sec
+                pt.time_from_start.nanosec = nanosec
+                pt.positions = [float(v) for v in arm_q]
+                arm_msg.points.append(pt)
+            self._right_arm_traj_pub.publish(arm_msg)
+
     def apply_panther_plan(self, plan: PantherActuationPlan) -> None:
         """Dispatch a validated `PantherActuationPlan` across the real UniX AI Panther topics."""
         if plan.preempt_teleop:
@@ -422,6 +484,9 @@ class ROS2HardwareAdapter:
 
         if plan.lift_position_m is not None:
             self.publish_lift(plan.lift_position_m, plan.lift_velocity_mps)
+
+        if plan.master_trajectory_points:
+            self.publish_master_trajectory(plan)
 
         if plan.gripper_side is not None and plan.gripper_position is not None:
             self.publish_gripper(

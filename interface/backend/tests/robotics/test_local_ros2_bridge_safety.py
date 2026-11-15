@@ -146,7 +146,7 @@ def test_panther_plan_timed_cmd_vel_lift_gripper_head_and_lidar_stop() -> None:
     )
     assert move_plan.twist.linear_x == pytest.approx(0.25)
     assert move_plan.twist_duration_seconds == pytest.approx(4.0)
-    assert move_plan.lift_position_m == pytest.approx(0.60)
+    assert move_plan.lift_position_m == pytest.approx(0.80)
     assert move_plan.enable_ultrasonics is True
     assert sup.evaluate_watchdog(52.0).linear_x == pytest.approx(0.25)
     # Once 4.0s duration completes -> /cmd_vel is automatically zeroed (never latched indefinitely)!
@@ -441,3 +441,64 @@ def test_sequential_multistep_command_queue_and_closed_loop_odom_precision() -> 
     stop_twist = sup.evaluate_watchdog(120.2)
     assert stop_twist.linear_x == pytest.approx(0.0)
     assert sup.active_command_id is None
+
+
+def test_headbands_clean_up_throw_trajectory_gripper_sentinel_and_detector() -> None:
+    from swiss_robot_bridge.camera_manager import detect_ground_frisbee_candidates
+    from swiss_robot_bridge.panther_topics import (
+        PANTHER_SIM_ROS_DOMAIN_ID,
+        TOPIC_MASTER_TRAJ,
+        can_service,
+        single_position,
+    )
+
+    assert PANTHER_SIM_ROS_DOMAIN_ID == 77
+    assert TOPIC_MASTER_TRAJ == "/master_controller/joint_trajectory"
+    assert can_service("joint_la0", "enable") == "/can0/joint_la0/enable"
+    assert can_service("joint_ra7", "disable") == "/can1/joint_ra7/disable"
+
+    # 1. Panther gripper state sentinel filter (-32.767 from int16 -32767 / 1000 is ignored)
+    assert single_position(SimpleNamespace(position=[-32.767])) is None
+    assert single_position(SimpleNamespace(position=[0.85])) == pytest.approx(0.85)
+
+    sup = LocalSafetySupervisor()
+    cam = PantherCameraManager(allow_sim_fallback=True)
+    hw = ROS2HardwareAdapter(supervisor=sup, camera_manager=cam)
+    hw._on_left_gripper_state(SimpleNamespace(position=[0.65]))
+    assert hw.left_gripper_pos == pytest.approx(0.65)
+    hw._on_left_gripper_state(SimpleNamespace(position=[-32.767]))
+    assert hw.left_gripper_pos == pytest.approx(0.65)  # Not overwritten by -32.767 sentinel!
+
+    # 2. Retargeted right-arm frisbee throw trajectory plan on /master_controller/joint_trajectory
+    now = datetime.now(tz=UTC)
+    throw_plan = sup.validate_and_compute_panther_plan(
+        {
+            "command_id": "cmd-throw-frisbee",
+            "action": "throw_object",
+            "object_label": "frisbee",
+            "speed": 0.25,
+            "confirmed_by_human": True,
+            "expires_at": (now + timedelta(seconds=30)).isoformat(),
+        },
+        now_utc=now,
+    )
+    assert throw_plan.master_trajectory_joints is not None
+    assert throw_plan.master_trajectory_joints[0] == "joint_ra0"
+    assert throw_plan.master_trajectory_joints[-1] == "joint_rf"
+    assert len(throw_plan.master_trajectory_points) >= 5
+    hw.apply_panther_plan(throw_plan)
+    assert len(hw.last_master_trajectory) == len(throw_plan.master_trajectory_points)
+    assert hw.right_gripper_pos == pytest.approx(0.0)
+    assert "joint_ra7" in hw.joint_positions
+
+    # 3. Classical CPU ground-frisbee ellipse detector (perception/detector/__init__.py)
+    rgb = np.zeros((240, 320, 3), dtype=np.uint8)
+    rgb[:, :] = (40, 45, 50)
+    yy, xx = np.ogrid[:240, :320]
+    white_disc = ((xx - 160) / 32.0) ** 2 + ((yy - 160) / 16.0) ** 2 <= 1.0
+    rgb[white_disc] = (230, 232, 228)
+    cands = detect_ground_frisbee_candidates(rgb)
+    assert len(cands) >= 1
+    assert abs(cands[0].cx - 160) <= 5
+    assert abs(cands[0].cy - 160) <= 5
+

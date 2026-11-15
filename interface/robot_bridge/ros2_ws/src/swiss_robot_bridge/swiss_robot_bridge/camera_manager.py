@@ -210,7 +210,7 @@ def extract_center_depth_meters(msg: Any) -> float | None:
 
 
 def validate_camera_http_url(url: str) -> str:
-    """Validate HTTP(S) snapshot URL (matching `HEADBands-main/Detect/camera_stream.py`)."""
+    """Validate HTTP(S) snapshot URL (matching `HEADBands/perception`)."""
     cleaned = url.strip()
     parts = urlsplit(cleaned)
     if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
@@ -218,6 +218,104 @@ def validate_camera_http_url(url: str) -> str:
     if parts.port is not None and not (1 <= parts.port <= 65535):
         raise ValueError("Camera snapshot port out of range")
     return cleaned
+
+
+@dataclass
+class GroundFrisbeeCandidate:
+    """Classical CPU ground-frisbee candidate matching `HEADBands/perception/detector/__init__.py`."""
+
+    x: int
+    y: int
+    w: int
+    h: int
+    cx: int
+    cy: int
+    area: float
+    axes: tuple[int, int]
+    angle: float
+    score: float
+
+
+def detect_ground_frisbee_candidates(
+    rgb: np.ndarray,
+    *,
+    rgb_sum_min: int = 435,
+    rgb_diff_max: int = 30,
+    ground_start_pct: int = 25,
+    min_area: int = 120,
+    max_area: int = 120000,
+) -> list[GroundFrisbeeCandidate]:
+    """Detect ground frisbees using the CPU color+ellipse algorithm from `HEADBands/perception/detector`."""
+    if rgb.ndim != 3 or rgb.shape[2] < 3:
+        return []
+    frame_h, frame_w, _ = rgb.shape
+    roi_y = int(round(frame_h * (max(0, min(85, ground_start_pct)) / 100.0)))
+    roi = rgb[roi_y:, :, :3].astype(np.int16)
+
+    # 1. White/neutral frisbee mask from perception/detector/__init__.py: R+G+B >= 435 and max-min <= 30
+    channel_sum = roi[:, :, 0] + roi[:, :, 1] + roi[:, :, 2]
+    channel_diff = np.max(roi, axis=2) - np.min(roi, axis=2)
+    white_mask = (channel_sum >= rgb_sum_min) & (channel_diff <= rgb_diff_max)
+
+    # 2. Bright orange/colored frisbee disc mask (for standard orange Panther test frisbees)
+    orange_mask = (roi[:, :, 0] >= 180) & (roi[:, :, 1] >= 65) & (roi[:, :, 1] <= 175) & (roi[:, :, 2] <= 80)
+    combined_mask = (white_mask | orange_mask).astype(np.uint8) * 255
+
+    try:
+        import cv2
+
+        open_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        cleaned = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, open_k)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, close_k)
+        contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        candidates: list[GroundFrisbeeCandidate] = []
+        for cnt in contours:
+            area = float(cv2.contourArea(cnt))
+            if area < min_area or area > max_area or len(cnt) < 5:
+                continue
+            rx, ry, rw, rh = cv2.boundingRect(cnt)
+            (ecx, ecy), (ma1, ma2), angle = cv2.fitEllipse(cnt)
+            major, minor = max(ma1, ma2), min(ma1, ma2)
+            if major <= 1.0 or (minor / major) < 0.18:
+                continue
+            candidates.append(
+                GroundFrisbeeCandidate(
+                    x=int(rx),
+                    y=int(ry + roi_y),
+                    w=int(rw),
+                    h=int(rh),
+                    cx=int(round(ecx)),
+                    cy=int(round(ecy + roi_y)),
+                    area=round(area, 1),
+                    axes=(max(1, int(round(major / 2.0))), max(1, int(round(minor / 2.0)))),
+                    angle=round(float(angle), 1),
+                    score=round(min(1.0, area / max(float(rw * rh), 1.0)), 3),
+                )
+            )
+        candidates.sort(key=lambda c: (c.score, c.area), reverse=True)
+        return candidates
+    except ImportError:
+        ys, xs = np.nonzero(combined_mask)
+        if ys.size < min_area:
+            return []
+        x0, x1 = int(xs.min()), int(xs.max())
+        y0, y1 = int(ys.min()) + roi_y, int(ys.max()) + roi_y
+        rw, rh = max(1, x1 - x0 + 1), max(1, y1 - y0 + 1)
+        return [
+            GroundFrisbeeCandidate(
+                x=x0,
+                y=y0,
+                w=rw,
+                h=rh,
+                cx=int(round(xs.mean())),
+                cy=int(round(ys.mean())) + roi_y,
+                area=float(ys.size),
+                axes=(max(1, rw // 2), max(1, rh // 2)),
+                angle=0.0,
+                score=round(min(1.0, float(ys.size) / float(rw * rh)), 3),
+            )
+        ]
 
 
 def build_synthetic_panther_frame(width: int = 320, height: int = 240) -> tuple[bytes, str, int, int]:

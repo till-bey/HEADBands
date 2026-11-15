@@ -59,7 +59,7 @@ def build_system_prompt(
         "and immediate E-Stop (`emergency_stop_robot`).\n"
         "- Whenever the user asks for ANY physical movement, multi-step navigation, rotation, turning around, "
         "stopping, returning home, looking, camera scene inspection ('what do you see?', 'where is the frisbee?', "
-        "'is the path clear?'), picking/grasping, or placing/releasing in ANY language — even shorthand phrases "
+        "'is the path clear?'), picking/grasping, placing/releasing, or throwing a frisbee ('throw the frisbee') in ANY language — even shorthand phrases "
         "WITHOUT a verb or WITHOUT saying the word 'robot' (e.g. '5 m forward', '2.5 m back', '50 cm left', "
         "'90 degrees right', 'go forward 5m', 'move forward 5 m and turn around', 'look around and find the frisbee', "
         "'geh 5 Meter vorwärts und dreh dich um', 'was siehst du vor dir?', 'avance de 5 mètres et fais demi-tour', "
