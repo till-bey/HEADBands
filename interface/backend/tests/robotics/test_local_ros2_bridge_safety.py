@@ -244,6 +244,13 @@ def test_panther_ros2_adapter_diagnostics_estop_battery_and_scan_callbacks() -> 
     )
     assert sup.front_obstacle_distance_m == pytest.approx(0.28)
 
+    # Real rclpy messages carry level as bytes (b"\x00" = OK): must not raise, must not latch
+    hw._on_diagnostics(
+        SimpleNamespace(status=[SimpleNamespace(name="diagnostic_broadcaster: CAN bus", message="", level=b"\x00", values=[])])
+    )
+    hw._on_diagnostics(SimpleNamespace(status=[SimpleNamespace(name="E-Stop", message="", level=b"\x00", values=[])]))
+    assert sup.local_estop_latched is False
+
     # Panther /diagnostics reporting E-Stop engaged -> latches local E-Stop offline
     diag_msg = SimpleNamespace(
         status=[

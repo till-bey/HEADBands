@@ -311,7 +311,8 @@ class ROS2HardwareAdapter:
         for status in getattr(msg, "status", []):
             name = str(getattr(status, "name", "")).lower()
             message = str(getattr(status, "message", "")).lower()
-            level = int(getattr(status, "level", 0))
+            level = getattr(status, "level", 0)
+            level = level[0] if isinstance(level, bytes) else int(level)  # rclpy gives DiagnosticStatus.level as b"\x00"
             if "estop" in name or "e-stop" in name or "emergency" in name:
                 triggered = level >= 2 or any(
                     tok in message for tok in ("active", "pressed", "true", "triggered", "engaged")
