@@ -101,3 +101,21 @@ frisbee_interceptor:
       min_time_to_intercept_s: 0.1
     interception:
       enabled: false                # prediction-only. Arm with ~/enable_interception, disarm with /frisbee/disable
+
+# Catch at the chest: the robot is already in its catching pose (panther_examples teach play --yes); this node
+# only closes the grippers when a throw aimed at the chest arrives. Disarmed by default (dry run: it publishes
+# "would_fire" on /frisbee/catch_event). Arm: ros2 service call /frisbee_catch_trigger/enable std_srvs/srv/SetBool "{data: true}"
+frisbee_catch_trigger:
+  ros__parameters:
+    gripper_topics: ["/left_gripper/gripper_command", "/right_gripper/gripper_command"]
+    close_positions: [1.0, 0.67]    # 0 open, 1 closed; right gripper capped at 0.67 like master_gui
+    close_velocity: 1.0
+    close_effort: 0.5
+    max_data_age_s: 0.25
+    catch:
+      gripper_latency_s: -1.0       # MEASURE: command -> grip closed on the frisbee rim (s); < 0 blocks arming
+      catch_window_px: [0.0]        # MEASURE: [u0, v0, u1, v1] pixels where a catchable throw crosses (the hands)
+      min_confidence: 0.5
+      min_lead_s: 0.0
+      max_late_s: 0.03
+      refractory_s: 2.0

@@ -4,6 +4,7 @@
 /src/*
 !/src/frisbee_msgs/
 !/src/frisbee_interception/
+!/src/unix_msgs/
 !/perception/
 /perception/*
 !/perception/Dataset/

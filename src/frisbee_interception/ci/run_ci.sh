@@ -19,7 +19,7 @@ python3 -c "import cv2, numpy; print('opencv', cv2.__version__, 'numpy', numpy._
 step "colcon build"
 WS=/tmp/frisbee_ws
 mkdir -p $WS/src
-cp -r src/frisbee_msgs src/frisbee_interception $WS/src/
+cp -r src/unix_msgs src/frisbee_msgs src/frisbee_interception $WS/src/
 (cd $WS && colcon build --event-handlers console_direct+) || { echo "BUILD FAILED"; exit 1; }
 source $WS/install/setup.bash
 

@@ -1,6 +1,9 @@
 # Frisbee detection, tracking and interception (ROS 2 Humble)
 
 Packages: `src/frisbee_msgs` (messages) and `src/frisbee_interception` (nodes, configs, launch, tests, CI).
+
+**Goal:** the robot holds a catching pose, the thrower aims at its chest, and the grippers close when the disc
+arrives (§6b).
 CPU only: Python + OpenCV + NumPy. No neural networks, no GPU, no training.
 
 **Default state: prediction only. Nothing in these packages moves the robot, and no joint command is ever published.**
@@ -96,7 +99,10 @@ least-squares fits over the last `max_points` measurements.
 | `/frisbee/catch_target` | `geometry_msgs/PointStamped` | **only when armed and safe** |
 | `/frisbee/markers` | `visualization_msgs/MarkerArray` | catch point, 3D line, plane, text |
 | `/frisbee/debug/detections`, `/frisbee/debug/intercept` | `sensor_msgs/Image` | only drawn while subscribed |
-| `/frisbee/disable` | `std_msgs/Empty` | disarms immediately |
+| `/frisbee/disable` | `std_msgs/Empty` | disarms the interceptor and the catch trigger immediately |
+| `/frisbee/catch_event` | `std_msgs/String` (JSON) | catch trigger: planned / cancelled / would_fire (disarmed) / fired / missed |
+| `/left_gripper/gripper_command`, `/right_gripper/gripper_command` | `unix_msgs/GripperCommand` | existing gripper interface; **only when the catch trigger is armed** |
+| `/frisbee_catch_trigger/enable` | `std_srvs/SetBool` | arm / disarm the catch trigger (refused until latency and window are set) |
 | `/frisbee_interceptor/enable_interception` | `std_srvs/SetBool` | arm / disarm |
 
 `FrisbeeIntercept`: `valid`, `status` (reason if invalid), `mode` (metric/image), `catch_point`, `intercept_time`,
@@ -215,7 +221,53 @@ The interceptor uses the TF only if it exists, and logs a warning otherwise.
 
 ---
 
-## 7. Controller integration (not done: proposal)
+## 6b. Catch at the chest (the goal): fixed catching pose + timed gripper close
+
+The robot does **not** chase the disc. It holds a catching pose, the thrower aims at its chest, and the only thing
+decided in real time is **when to close the grippers**. That needs only the arrival time, which is what the
+predictor gives, and no arm motion during the throw.
+
+```
+teach play (catching pose, before the throw) ──► arms + grippers open, held by the existing controllers
+camera on the robot, looking at the thrower ─► detector → tracker → interceptor ─► /frisbee/intercept
+frisbee_catch_trigger: crossing pixel inside catch window? confident? ─► close at (arrival − gripper latency)
+                                                 └─► /left_gripper/gripper_command, /right_gripper/gripper_command
+```
+
+`frisbee_catch_trigger` sends `unix_msgs/GripperCommand`, built exactly like `panther_examples/teach.py` does
+(`mode: parallel`, right gripper capped at 0.67 like `master_gui`). It never commands arms or the lift. It is
+**disarmed by default**: it then publishes `would_fire` on `/frisbee/catch_event` at the moment it would have closed,
+so the timing can be checked on real throws first.
+
+**Procedure**
+
+1. **Catching pose.** Put the arms where the disc should land (in front of the chest, grippers open, rims at
+   disc height), using the existing tools:
+   `ros2 run panther_examples teach record --seconds 10` (move the arms by hand into the pose), then
+   `teach action` and `ros2 run panther_examples teach play --yes`.
+2. **Camera.** Mount it on the robot at chest height, looking at the thrower (the phone, or the robot's camera with
+   `use_phone_camera:=false`). It must not move during the throw (`detection.method: background`).
+3. **Catch size** (`frisbee_interceptor/prediction.catch_diameter_px`). Hold the disc face-on between the open
+   grippers and read `major_px` from `/frisbee/detections`.
+4. **Catch window** (`frisbee_catch_trigger/catch.catch_window_px`). Still holding it there, note its center pixel.
+   Move it to the left/right/top/bottom limits the grippers can still close on, and set `[u0, v0, u1, v1]`.
+   Throws predicted to cross outside it are ignored (logged as "throw will miss the catch window").
+5. **Gripper latency** (`catch.gripper_latency_s`). Film the gripper at 120–240 fps while sending one close command
+   (for example `ros2 topic pub --once /left_gripper/gripper_command unix_msgs/msg/GripperCommand ...`) and count
+   the frames until it is closed far enough to hold a rim. Until this is set (it is −1), **arming is refused**.
+6. **Dry run.** Launch and watch `ros2 topic echo /frisbee/catch_event`. Every throw at the chest should give one
+   `planned` and one `would_fire` slightly before the disc arrives.
+7. **Arm** (operator at the e-stop):
+   `ros2 service call /frisbee_catch_trigger/enable std_srvs/srv/SetBool "{data: true}"`.
+   Disarm: `ros2 topic pub --once /frisbee/disable std_msgs/msg/Empty {}`, which disarms this node and the
+   interceptor.
+
+**Timing budget.** The first valid prediction must come at least one gripper latency before arrival. In the
+2026-11-15 clips (3–5 m, 30 fps) it came 0.02–0.075 s before arrival, which is enough only for a very fast gripper.
+With throws from 8–10 m at 60 fps, the synthetic tests give 0.45–0.65 s, enough for any gripper. In the CI the
+trigger closes once per throw, about one latency before the true arrival (within 0.06 s).
+
+## 7. Controller integration for moving the hand (not done: proposal)
 
 No existing interface accepts a Cartesian target, and the task says not to add a second controller. So
 `/frisbee/catch_target` is **not connected** to anything. The smallest change that would connect it reuses what
@@ -242,7 +294,7 @@ hand, short corrections, and higher joint speeds, and those must be validated on
 
 | Input | Result |
 |---|---|
-| Unit tests (20) | pass with OpenCV 4.5.4 (Ubuntu 22.04 / Humble) and 4.14 |
+| Unit tests (25) | pass with OpenCV 4.5.4 (Ubuntu 22.04 / Humble) and 4.14 |
 | Synthetic throws, 9 m → camera at 9 m/s, `background`, 3 noise seeds | first valid prediction **0.45–0.65 s** before contact. Crossing-time error stays under **40% of the time still to go** (≈ 0.1–0.2 s half a second out, a few tens of ms near contact). Pixel error ≤ 50 px early and **≤ 20 px in the last 0.3 s** (≤ 4.5 cm at 1 m) |
 | Full ROS launch, image mode (Cloud Build CI, looped synthetic throw, 20 s) | 55 valid predictions. Pixel error ≤ 17 px in the last 0.3 s; the first prediction of each throw (~0.5 s out) is 48–64 px off. Arming refused (no workspace), **0 catch targets** |
 | Full ROS launch, metric mode (intrinsics + static TF + plane) | catch point error **9–37 mm**. Armed: 16 catch targets; after `/frisbee/disable`: **0**. Far predictions correctly rejected for position uncertainty > 0.25 m |

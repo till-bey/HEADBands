@@ -37,6 +37,10 @@ ip["camera"] = {"fx": truth["fx"], "fy": truth["fy"], "cx": truth["cx"], "cy": t
 ip["catch_plane"] = {"point": [0.0, 0.0, 1.0], "normal": [0.0, 0.0, 1.0]}
 ip["safety"]["workspace_min"] = [-1.0, -1.0, 0.5]
 ip["safety"]["workspace_max"] = [1.0, 1.0, 1.5]
+# Catch trigger: 0.1 s gripper latency, catch window +-80 px around where the throw crosses the plane.
+u, v = (float(x) for x in catch["pixel"])
+met["frisbee_catch_trigger"]["ros__parameters"]["catch"].update(
+    gripper_latency_s=0.1, catch_window_px=[u - 80, v - 80, u + 80, v + 80])
 (out / "cfg_metric.yaml").write_text(yaml.safe_dump(met))
 
 print(json.dumps(truth["catch"], indent=1))

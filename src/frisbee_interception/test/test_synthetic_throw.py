@@ -23,6 +23,10 @@ def test_synthetic_throw_prediction(tmp_path, seed):
     cfg = yaml.safe_load((Path(__file__).resolve().parents[1] / "config" / "frisbee.yaml").read_text())
     cfg["frisbee_detector"]["ros__parameters"]["detection"]["method"] = "background"
     cfg["frisbee_interceptor"]["ros__parameters"]["prediction"]["catch_diameter_px"] = catch["diameter_px"]
+    # Catch trigger: a 0.1 s gripper and a window of +-60 px around where this throw crosses the plane.
+    u, v = (float(x) for x in catch["pixel"])
+    cfg["frisbee_catch_trigger"]["ros__parameters"]["catch"].update(
+        gripper_latency_s=0.1, catch_window_px=[u - 60, v - 60, u + 60, v + 60])
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
 
@@ -41,3 +45,8 @@ def test_synthetic_throw_prediction(tmp_path, seed):
         # (20 px = 4.5 cm at 1 m with this camera).
         assert t_err < max(0.05, 0.4 * f["tti"]), f
         assert px_err < (20 if f["tti"] <= 0.3 else 50), f
+
+    # The grippers are told to close once, about one latency before the disc actually arrives.
+    assert len(stats["catch_fired"]) == 1
+    fired = stats["catch_fired"][0]
+    assert fired["t"] + 0.1 == pytest.approx(catch["t_video"], abs=0.06)

@@ -9,7 +9,7 @@
       image_topic:=/camera/color/image_raw camera_info_topic:=/camera/color/camera_info
 
 Arguments: source, use_phone_camera, image_topic, camera_info_topic, image_transport, config, rotate,
-calibration_file, rviz, loop.
+calibration_file, rviz, loop, catch_trigger.
 """
 
 import os
@@ -42,6 +42,8 @@ def generate_launch_description():
         DeclareLaunchArgument("calibration_file", default_value="", description="camera_calibration YAML"),
         DeclareLaunchArgument("rviz", default_value="false"),
         DeclareLaunchArgument("loop", default_value="false", description="replay a video file in a loop"),
+        DeclareLaunchArgument("catch_trigger", default_value="true",
+                              description="start frisbee_catch_trigger (disarmed: it only logs would_fire events)"),
         Node(
             package="frisbee_interception", executable="phone_camera", name="phone_camera",
             condition=IfCondition(use_phone),
@@ -68,6 +70,11 @@ def generate_launch_description():
             parameters=[config, {"image_transport": transport}],
             remappings=[("image", image_topic), ("image/compressed", [image_topic, "/compressed"]),
                         ("camera_info", info_topic)],
+        ),
+        Node(
+            package="frisbee_interception", executable="frisbee_catch_trigger", name="frisbee_catch_trigger",
+            condition=IfCondition(LaunchConfiguration("catch_trigger")),
+            parameters=[config],
         ),
         Node(
             package="rviz2", executable="rviz2", name="rviz2", condition=IfCondition(LaunchConfiguration("rviz")),

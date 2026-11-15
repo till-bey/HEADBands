@@ -18,7 +18,7 @@ import time
 import rclpy
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, String
 from std_srvs.srv import SetBool
 
 from frisbee_msgs.msg import FrisbeeDetectionArray, FrisbeeIntercept, FrisbeeTrack
@@ -36,6 +36,14 @@ class Checker(Node):
         self.create_subscription(PointStamped, "/frisbee/catch_target", self._tgt, 50)
         self.disable_pub = self.create_publisher(Empty, "/frisbee/disable", 10)
         self.enable_cli = self.create_client(SetBool, "/frisbee_interceptor/enable_interception")
+        self.catch_cli = self.create_client(SetBool, "/frisbee_catch_trigger/enable")
+        self.grips, self.catch_events = [], []
+        from unix_msgs.msg import GripperCommand  # noqa: PLC0415
+        for topic in ("/left_gripper/gripper_command", "/right_gripper/gripper_command"):
+            self.create_subscription(GripperCommand, topic,
+                                     lambda m, tp=topic: self.grips.append({"wall": time.monotonic(), "topic": tp,
+                                                                            "position": list(m.command.position)}), 10)
+        self.create_subscription(String, "/frisbee/catch_event", lambda m: self.catch_events.append(json.loads(m.data)), 50)
 
     def _det(self, m):
         self.n_det += 1
@@ -55,10 +63,11 @@ class Checker(Node):
     def _tgt(self, m):
         self.targets.append({"wall": time.monotonic(), "point": [m.point.x, m.point.y, m.point.z]})
 
-    def call_enable(self, value: bool):
-        if not self.enable_cli.wait_for_service(timeout_sec=15.0):
+    def call_enable(self, value: bool, cli=None):
+        cli = cli or self.enable_cli
+        if not cli.wait_for_service(timeout_sec=15.0):
             return None
-        fut = self.enable_cli.call_async(SetBool.Request(data=value))
+        fut = cli.call_async(SetBool.Request(data=value))
         rclpy.spin_until_future_complete(self, fut, timeout_sec=5.0)
         r = fut.result()
         return None if r is None else {"success": r.success, "message": r.message}
@@ -86,11 +95,17 @@ def main():
         res = n.call_enable(True)
         report["enable_response"] = res
         checks["arming refused without workspace"] = res is not None and not res["success"]
+        cres = n.call_enable(True, n.catch_cli)
+        report["catch_enable_response"] = cres
+        checks["catch trigger arming refused without calibration"] = cres is not None and not cres["success"]
         spin_for(n, a.duration)
     else:
         res = n.call_enable(True)
         report["enable_response"] = res
         checks["arming accepted with workspace"] = res is not None and res["success"]
+        cres = n.call_enable(True, n.catch_cli)
+        report["catch_enable_response"] = cres
+        checks["catch trigger armed with calibration"] = cres is not None and cres["success"]
         spin_for(n, a.duration * 0.7)
         n.disable_pub.publish(Empty())
         n.disabled_at = time.monotonic()
@@ -101,6 +116,7 @@ def main():
         "detection_msgs": n.n_det, "detection_msgs_nonempty": n.n_det_nonempty,
         "track_msgs": n.n_track, "confirmed_track_msgs": n.n_confirmed,
         "intercept_msgs": len(n.intercepts), "valid_intercepts": len(valid), "catch_targets": len(n.targets),
+        "catch_events": sorted({e["event"] for e in n.catch_events}),
         "statuses": sorted({i["status"].split(" (")[0] for i in n.intercepts})[:20],
         "truth": truth,
     })
@@ -116,6 +132,7 @@ def main():
         checks["predicted pixel within 20 px in the last 0.3 s"] = bool(late) and max(late) < 20
         checks["predicted pixel within 80 px earlier"] = max(early, default=0.0) < 80
         checks["no catch target while disarmed"] = len(n.targets) == 0
+        checks["grippers never commanded"] = len(n.grips) == 0
     else:
         errs = [math.dist(i["point"], truth["point_cam"]) for i in valid]
         report["point_errors_m"] = [round(e, 3) for e in errs]
@@ -126,6 +143,15 @@ def main():
         report["targets_before_disable"], report["targets_after_disable"] = len(before), len(after)
         checks["catch targets sent while armed"] = len(before) >= 1
         checks["no catch target after /frisbee/disable"] = len(after) == 0
+        g_before = [g for g in n.grips if g["wall"] < n.disabled_at]
+        g_after = [g for g in n.grips if g["wall"] > n.disabled_at + 0.2]
+        fired = [e for e in n.catch_events if e["event"] == "fired"]
+        report["gripper_commands_before_disable"], report["gripper_commands_after_disable"] = len(g_before), len(g_after)
+        report["catch_fired_events"] = fired
+        checks["grippers closed while armed (both topics)"] = {g["topic"] for g in g_before} == {
+            "/left_gripper/gripper_command", "/right_gripper/gripper_command"}
+        checks["one close per throw (refractory)"] = 1 <= len(fired) <= 1 + int(a.duration * 0.7 / 2.0)
+        checks["no gripper command after /frisbee/disable"] = len(g_after) == 0
     report["checks"] = checks
     report["passed"] = all(checks.values())
     json.dump(report, open(a.report, "w"), indent=1)

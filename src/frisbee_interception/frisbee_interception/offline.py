@@ -15,6 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from frisbee_interception.core.catch_trigger import CatchConfig, CatchScheduler
 from frisbee_interception.core.detection import DetectorConfig, FrisbeeDetector
 from frisbee_interception.core.prediction import InterceptPredictor, PredictorConfig
 from frisbee_interception.core.tracking import FrisbeeTracker, Measurement, TrackerConfig
@@ -50,11 +51,15 @@ def run(video: str, cfg_path: str | None, out: str | None, log_path: str | None,
     trk = FrisbeeTracker(TrackerConfig.from_dict({k[len("tracking."):]: v for k, v in trk_p.items() if k.startswith("tracking.")}))
     pcfg = PredictorConfig.from_dict({k[len("prediction."):]: v for k, v in prd_p.items() if k.startswith("prediction.")})
     pred = InterceptPredictor(pcfg)
+    # Catch trigger (dry run): simulated only when its calibration is set in the config.
+    ccfg = CatchConfig.from_dict({k[len("catch."):]: v for k, v in load_yaml_section(cfg_path, "frisbee_catch_trigger").items()
+                                  if k.startswith("catch.")})
+    catch = CatchScheduler(ccfg) if not ccfg.calibration_problems() else None
     cap = cv2.VideoCapture(video)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     writer = None
     log, i = [], 0
-    stats = {"frames": 0, "detections": 0, "confirmed_frames": 0, "valid_predictions": 0, "reasons": {}}
+    stats = {"frames": 0, "detections": 0, "confirmed_frames": 0, "valid_predictions": 0, "reasons": {}, "catch_fired": []}
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -73,6 +78,14 @@ def run(video: str, cfg_path: str | None, out: str | None, log_path: str | None,
                 stats["valid_predictions"] += 1
             else:
                 stats["reasons"][p.reason.split(" (")[0]] = stats["reasons"].get(p.reason.split(" (")[0], 0) + 1
+        if catch is not None:
+            ok_p = p is not None and p.valid and p.pixel is not None
+            catch.update(t, ok_p, p.intercept_time if ok_p else float("nan"), p.pixel if ok_p else None,
+                         p.confidence if ok_p else 0.0)
+            fired = catch.due(t)
+            if fired is not None:
+                stats["catch_fired"].append({"t": round(t, 4), "close_at": round(fired.close_at, 4),
+                                             "intercept_time": round(fired.intercept_time, 4)})
         stats["frames"] += 1
         stats["detections"] += len(dets)
         entry = {"frame": i, "t": round(t, 4), "n_det": len(dets), "state": state}
