@@ -12,6 +12,11 @@ Run one step at a time inside the Docker container:
 
 disable drops torque. play moves the robot.
 Neither runs without --yes.
+
+A second disable or enable after teaching often times out: the drive is in
+Fault and those two calls never pulse the fault-reset bit. Each joint then
+falls back to /canX/<joint>/recover, which resets the fault and returns to
+Operation Enabled without homing. /init is not used; it homes the joint.
 """
 
 import argparse
@@ -102,6 +107,46 @@ def hardware_state(name):
         elif current == name and "label=" in stripped:
             return stripped.split("label=", 1)[1].strip().strip("'\"")
     return "unknown"
+
+
+def enable_arm_joints(joints):
+    """Enable joints. On failure, recover (fault reset, no homing).
+
+    enable walks the CiA 402 machine toward Operation Enabled and does not
+    clear a latched fault-reset bit. After the arm has been moved by hand,
+    the next enable or disable then times out and the motor stays put.
+    recover pulses that bit, restarts the current mode, and enables.
+    init is intentionally not called: Motor402::handleInit homes the drive.
+    """
+    failed = []
+    for joint in joints:
+        if call_trigger(service_name(joint, "enable")):
+            continue
+        print(f"{joint}: enable did not take; calling recover.")
+        if call_trigger(service_name(joint, "recover")):
+            continue
+        failed.append(joint)
+    return failed
+
+
+def disable_arm_joints(joints):
+    """Drop torque. If the drive is faulted, recover, then disable again.
+
+    recover brings the joint back to Operation Enabled, so torque returns
+    for a moment before the second disable. Hold the arm.
+    """
+    failed = []
+    for joint in joints:
+        if call_trigger(service_name(joint, "disable")):
+            continue
+        print(
+            f"{joint}: disable did not take. "
+            "Recovering (torque comes back), then disabling again. Hold the arm.")
+        if call_trigger(service_name(joint, "recover")) and call_trigger(
+                service_name(joint, "disable")):
+            continue
+        failed.append(joint)
+    return failed
 
 
 def call_trigger(service):
@@ -261,17 +306,14 @@ def step_disable():
             ["ros2", "control", "set_hardware_component_state", ghw, "inactive"],
             check=False)
 
-    failed = []
-    for joint in ARMS:
-        if not call_trigger(service_name(joint, "disable")):
-            failed.append(joint)
+    failed = disable_arm_joints(ARMS)
 
     if failed:
-        print("Note: CAN disable returned False for: " + " ".join(failed))
-        print("If forward controller was released, verify if drives are already de-energized.")
-    else:
-        print("All 16 arm joints accepted disable.")
+        print("CAN disable still failed after recover: " + " ".join(failed))
+        print("Those joints did not drop torque. Do not let go of them.")
+        return 1
 
+    print("All 16 arm joints accepted disable.")
     print("Move arms and grippers by hand, then run: record")
     return 0
 
@@ -279,8 +321,11 @@ def step_disable():
 def step_enable():
     """Re-enable all CAN joints and restore the forward controller to hold arms."""
     print("Re-enabling CAN joints on left and right arms...")
-    for joint in ARMS:
-        call_trigger(service_name(joint, "enable"))
+    failed = enable_arm_joints(ARMS)
+    if failed:
+        print("CAN enable still failed after recover: " + " ".join(failed))
+        print("The forward controller was not activated.")
+        return 1
 
     for ghw in (LEFT_GRIPPER_HARDWARE, RIGHT_GRIPPER_HARDWARE):
         print(f"Re-activating {ghw}...")
@@ -301,7 +346,9 @@ def step_adjust_height(node, step_size=0.05):
     """Disable arms, let user adjust base height interactively, then re-enable arms."""
     print("\n=== Base Height Interactive Adjustment ===")
     print("1. Disabling both arms so they can be positioned freely...")
-    step_disable()
+    if step_disable() != 0:
+        print("Arms did not disable. Height adjustment aborted.")
+        return 1
 
     current_height = [0.2]  # fallback estimate
 
@@ -360,7 +407,9 @@ def step_adjust_height(node, step_size=0.05):
 
     # Re-enable arms
     print("\n2. Re-enabling arms to lock them at the new height...")
-    step_enable()
+    if step_enable() != 0:
+        print("Arms did not re-enable. Hold them.")
+        return 1
     print(f"Base height successfully set to ~{target_height:.3f} m with arms re-enabled.\n")
     return 0
 
@@ -587,8 +636,11 @@ def step_play(node, action_file=None):
     # 2. Re-enable arm joints and gripper hardware
     print("Re-enabling CAN drives...")
     active_arms = ARMS if is_dual else RIGHT_ARM
-    for joint in active_arms:
-        call_trigger(service_name(joint, "enable"))
+    failed = enable_arm_joints(active_arms)
+    if failed:
+        print("CAN enable still failed after recover: " + " ".join(failed))
+        print("Controller switch was not attempted.")
+        return 1
 
     for ghw in ([LEFT_GRIPPER_HARDWARE, RIGHT_GRIPPER_HARDWARE] if is_dual else [RIGHT_GRIPPER_HARDWARE]):
         subprocess.run(
