@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-ros2-control \
         ros-humble-ros2-controllers \
         ros-humble-rqt-joint-trajectory-controller \
+        ros-humble-canopen-interfaces \
         python3-pykdl \
     && rm -rf /var/lib/apt/lists/*
 

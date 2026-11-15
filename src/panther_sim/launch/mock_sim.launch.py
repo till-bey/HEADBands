@@ -3,11 +3,11 @@ Always runs on ROS_DOMAIN_ID 77, localhost only, whatever the terminal is set to
 
 ros2 launch panther_sim mock_sim.launch.py
   urdf:=<path>    robot URDF (default: urdf/robot_description.urdf, the robot's /robot_description)
-  meshes:=<dir>   local copy of the robot's mh3_description share directory; without it, stand-in shapes
+  meshes:=<dir>   local copy of the robot's mh3_description share directory; without it, stylized stand-ins
 """
-import math
 import os
 import re
+import tempfile
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
@@ -16,6 +16,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironment
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from panther_examples import robot as r
+from panther_sim import meshes
 
 SHARE = get_package_share_directory("panther_sim")
 LIFT_TOP = r.MAX_LIFT  # the vendor body height is the top of the travel
@@ -37,32 +38,16 @@ SIM_CYCLONE = '<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="
 VENDOR_MESHES = r"file://[^\"]*/share/mh3_description"
 
 
-def _visual(link, geometry, xyz="0 0 0", rpy="0 0 0", rgba="0.75 0.75 0.78 1"):
-    v = ET.SubElement(link, "visual")
-    ET.SubElement(v, "origin", xyz=xyz, rpy=rpy)
-    ET.SubElement(ET.SubElement(v, "geometry"), *geometry)
-    m = ET.SubElement(v, "material", name=rgba)
-    ET.SubElement(m, "color", rgba=rgba)
-
-
-def add_primitive_visuals(root):
-    """Stand-in for the vendor meshes: each link is a rod from its origin to each child joint."""
-    links = {l.get("name"): l for l in root.findall("link")}
-    _visual(links["base_link"], ("box", {"size": "0.5 0.42 0.22"}), xyz="0 0 0.17", rgba="0.25 0.25 0.28 1")
-    for j in root.findall("joint"):
-        parent, child = j.find("parent").get("link"), j.find("child").get("link")
-        x, y, z = (float(v) for v in j.find("origin").get("xyz", "0 0 0").split())
-        if child.endswith("_con"):  # drive wheel
-            _visual(links[child], ("cylinder", {"radius": "0.06", "length": "0.04"}), rpy="1.5708 0 0", rgba="0.1 0.1 0.1 1")
-        if j.get("type") == "revolute":
-            _visual(links[child], ("sphere", {"radius": "0.035"}), rgba="0.95 0.55 0.1 1")
-        length = math.sqrt(x * x + y * y + z * z)
-        if length < 0.02 or (parent == "base_link" and child != "body_link"):
-            continue  # base box already covers the wheel mounts and sensors
-        radius = "0.07" if child == "body_link" else "0.025"
-        rpy = f"0 {math.atan2(math.hypot(x, y), z)} {math.atan2(y, x)}"  # turns the cylinder's z axis onto (x, y, z)
-        _visual(links[parent], ("cylinder", {"radius": radius, "length": str(length)}), xyz=f"{x/2} {y/2} {z/2}", rpy=rpy)
-    _visual(links["link_head1"], ("box", {"size": "0.14 0.2 0.16"}), xyz="0.04 0 0.07", rgba="0.25 0.25 0.28 1")
+def use_meshes(root, mesh_dir):
+    """Point the vendor mesh paths at mesh_dir, or at the stylized stand-ins (panther_sim/meshes.py) without one."""
+    if not mesh_dir:
+        mesh_dir = meshes.write_all(os.path.join(tempfile.gettempdir(), "panther_sim_meshes"))
+        for link in root.findall("link"):  # odin1_ros2_driver is not installed here; base_link's stand-in has the sensor
+            for v in link.findall("visual"):
+                if "odin1_ros2_driver" in v.find("geometry/mesh").get("filename", ""):
+                    link.remove(v)
+    for m in root.iter("mesh"):
+        m.set("filename", re.sub(VENDOR_MESHES, "file://" + os.path.abspath(os.path.expanduser(mesh_dir)), m.get("filename")))
 
 
 def robot_description(urdf_path, mesh_dir):
@@ -70,10 +55,7 @@ def robot_description(urdf_path, mesh_dir):
     for tag in ("ros2_control", "gazebo"):  # vendor blocks load CAN hardware plugins that only exist on the robot
         for e in root.findall(tag):
             root.remove(e)
-    if not mesh_dir:  # the vendor meshes are only on the robot: drop them so the stand-in shapes are drawn
-        for link in root.findall("link"):
-            for v in link.findall("visual") + link.findall("collision"):  # RViz loads collision meshes too
-                link.remove(v)
+    use_meshes(root, mesh_dir)
     for j in root.findall("joint"):
         lim = j.find("limit")
         if j.get("name") in ARM_HEAD and lim is not None and float(lim.get("velocity", "0")) == 0:
@@ -103,8 +85,6 @@ def robot_description(urdf_path, mesh_dir):
             by_name[finger].set("type", "revolute")
             by_name[finger].find("limit").set("upper", str(FINGER_CLOSE))
             ET.SubElement(by_name[finger], "mimic", joint=f"joint_{s}f", multiplier=str(FINGER_CLOSE))
-    if not any(l.find("visual") is not None for l in root.findall("link")):
-        add_primitive_visuals(root)
 
     for hw, names in HARDWARE.items():
         joints = "".join(
@@ -115,10 +95,7 @@ def robot_description(urdf_path, mesh_dir):
             joints += "".join(f'<joint name="{j}"><state_interface name="position"/></joint>' for j in WHEELS)
         root.append(ET.fromstring(f'<ros2_control name="{hw}" type="system"><hardware>'
                                   '<plugin>mock_components/GenericSystem</plugin></hardware>' + joints + "</ros2_control>"))
-    xml = ET.tostring(root, encoding="unicode")
-    if mesh_dir:
-        xml = re.sub(VENDOR_MESHES, "file://" + os.path.abspath(os.path.expanduser(mesh_dir)), xml)
-    return xml
+    return ET.tostring(root, encoding="unicode")
 
 
 def nodes(context):

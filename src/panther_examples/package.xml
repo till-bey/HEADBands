@@ -11,12 +11,14 @@
   <depend>control_msgs</depend>
   <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>lifecycle_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>trajectory_msgs</depend>
   <depend>unix_msgs</depend>
+  <exec_depend>canopen_interfaces</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-pykdl</exec_depend>
 

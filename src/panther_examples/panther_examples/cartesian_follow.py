@@ -36,9 +36,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectoryPoint
 
-from panther_examples.robot import FORWARD, LEFT_GRIPPER_CMD_TOPIC, LEFT_TRAJ, RIGHT_GRIPPER_CMD_TOPIC, RIGHT_TRAJ
+from panther_examples.robot import FORWARD, LEFT_GRIPPER_CMD_TOPIC, LEFT_TRAJ, MAX_JOINT_VEL, RIGHT_GRIPPER_CMD_TOPIC, RIGHT_TRAJ
 
-MAX_JOINT_VEL = 0.5  # rad/s, our choice; no vendor limit (PR #521 averages 0.35 rad/s on the robot)
 BASE = "body_link"
 
 

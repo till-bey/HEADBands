@@ -21,6 +21,7 @@ LEFT_GRIPPER_CMD_TOPIC = "/left_gripper/gripper_command"
 RIGHT_GRIPPER_CMD_TOPIC = "/right_gripper/gripper_command"
 LEFT_GRIPPER_STATE_TOPIC = "/left_gripper/joint_states"
 RIGHT_GRIPPER_STATE_TOPIC = "/right_gripper/joint_states"
+RIGHT_GRIPPER_MAX = 0.67  # master_gui closes the right gripper no further (0 open, 1 fully closed)
 
 LIFT_CONTROLLER = "lifting_controller"
 LIFT_CMD_TOPIC = "/lifting_controller/commands"
@@ -28,6 +29,7 @@ LIFT_STATE_TOPIC = "/lifting_controller/joint_states"
 # shortcut: 0.8 m is the SDK/user-guide travel; nobody has read the top end stop on the robot yet. Measure, then fix here.
 MIN_LIFT, MAX_LIFT = 0.0, 0.8  # m, 0 = bottom
 LIFT_VEL = 0.05  # m/s, SDK limit
+MAX_JOINT_VEL = 0.5  # rad/s, our choice; no vendor limit (PR #521 averages 0.35 rad/s on the robot)
 
 
 def can_service(joint, verb):

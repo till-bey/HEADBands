@@ -7,8 +7,32 @@ Robot scripts. Run them in the container (`docker/run.sh`, or `docker/run.sh --s
 | `ros2 run panther_examples joint_check [--yes]` | Moves every joint (arms, head, grippers, lift) a small step and back, checks the measured position follows. Without `--yes` it prints the plan only |
 | `ros2 run panther_examples teach ...` | Record both arms and grippers moved by hand, adjust the lift, play back. Steps in the [script docstring](panther_examples/teach.py) |
 | `ros2 run panther_examples cartesian_follow ...` | Cartesian path for one arm, IK with PyKDL (below) |
-| `ros2 run panther_examples master_controller` | One `JointTrajectory` topic, `/master_controller/joint_trajectory`, for both arms, head, lift and grippers in any mix; split onto each robot controller. Usage in the [script docstring](panther_examples/master_controller.py) |
+| `ros2 run panther_examples master_gui` | One window for both arms, head, grippers, lift and base ([below](#master-gui)) |
 | `ros2 run panther_examples commands` | Scratchpad of single commands (gripper, base, head, dual arm); edit `main()` |
+
+# Master GUI
+
+[`master_gui.py`](panther_examples/master_gui.py) opens one window with a slider for every arm, head and gripper joint, a lift slider, hold-to-drive base buttons, and record/play. It drives the robot's own controllers, so nothing is installed on the robot, and it runs the same in the sim and on the robot:
+
+```bash
+ros2 run panther_examples master_gui
+ros2 launch panther_sim robot_rviz.launch.py   # on the robot, in a second terminal, to watch it in RViz
+```
+
+- **Arms:** `left_` and `right_arm_joint_trajectory_position_controller`, switched in for `dual_arm_forward_position_controller` as `cartesian_follow` does. Closing the window, or Ctrl-C, switches them back.
+- **Head:** `head_forward_position_controller` jumps to each command, so the GUI sends it interpolated positions at 50 Hz.
+- **Grippers:** `/left_gripper` and `/right_gripper/gripper_command`.
+- A slider is sent when you release it, timed so no joint goes over 0.5 rad/s (grippers: a full stroke per second).
+- The lift has no `ros2_control` command interface, so its slider publishes `/lifting_controller/commands` at 0.05 m/s.
+- The base buttons publish `/cmd_vel` at 0.2 m/s or 0.4 rad/s while held, and a stop on release or when the window loses focus.
+- **Record** samples the 20 joints and the lift at 10 Hz from the robot's state, however they move, into `teach_out/gui_<date>_<time>.csv`: rows `t,joint_la0..joint_rf,body_joint` under a `# t,<joint names>` header.
+- **Play file…** takes any CSV with that header and any subset of those joints, so the `motion/retarget/joints_*.csv` files work too. The lift goes to the first row's height and stays there. Then the joints go to the first row at 0.5 rad/s and follow the file at its own timing, and joints not in the file hold. Values more than 0.05 past a limit are refused. Above 0.62 rad/s it asks first.
+- **✋ Record by hand** (pick `right`, `left` or `both` next to it): switches that arm's trajectory controller off, then drops torque on each of its joints with `recover` then `disable`. On this robot, plain `disable` answers `False` and leaves the torque on. **Hold the arm before pressing OK.** Move it by hand while it records, as above. **🔒 Stop and lock** turns torque back on by restarting the arm's hardware component (`unix_openarm_left` / `right`, inactive then active), then switches the trajectory controller back in, holding the arm where you left it. On this robot, `enable` and `recover` cannot bring back a disabled joint; only that restart, or rebooting the robot, does (tested 2026-11-15). Closing the window with an arm free locks it first.
+- **Stop all** holds every joint where it is and stops the lift and the base.
+
+Typical use: set the lift with its slider, then either Record and move the arms and head with the sliders, or Record by hand. Stop, then Play file… to replay it.
+
+Tested in the sim (2026-11-15), which runs the robot's controller names and topics. Not tried on the robot: the gripper `velocity` units (sent as strokes per second, as the sim reads them; check before closing a gripper on anything), whether the arm stays exactly where you left it when Stop and lock restarts its hardware (try small moves first), and the base speeds.
 
 # Cartesian trajectory following (PyKDL)
 

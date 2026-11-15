@@ -22,7 +22,8 @@ setup(
             "teach = panther_examples.teach:main",
             "cartesian_follow = panther_examples.cartesian_follow:main",
             "joint_check = panther_examples.joint_check:main",
-            "master_controller = panther_examples.master_controller:main",
+            "master_gui = panther_examples.master_gui:main",
+            "can_state = panther_examples.can_state:main",
         ],
     },
 )

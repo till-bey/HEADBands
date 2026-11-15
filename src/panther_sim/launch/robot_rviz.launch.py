@@ -1,4 +1,4 @@
-"""RViz on the real robot, drawn with the sim's stand-in shapes (the robot's meshes are not on this laptop).
+"""RViz on the real robot, drawn with the sim's stylized stand-in meshes (the robot's meshes are not on this laptop).
 
 ros2 launch panther_sim robot_rviz.launch.py     # in a robot terminal (docker/run.sh)
 
@@ -35,10 +35,7 @@ def standin_description():
         lim = j.find("limit")
         if j.get("name") in mock_sim.ARM_HEAD and lim is not None and float(lim.get("velocity", "0")) == 0:
             lim.set("velocity", mock_sim.SIM_ARM_VEL)  # the robot's is 0 and rqt divides by it
-    for link in root.findall("link"):
-        for v in link.findall("visual") + link.findall("collision"):  # meshes only exist on the robot
-            link.remove(v)
-    mock_sim.add_primitive_visuals(root)
+    mock_sim.use_meshes(root, "")  # the vendor meshes only exist on the robot
     return ET.tostring(root, encoding="unicode")
 
 

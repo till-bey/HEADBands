@@ -7,7 +7,7 @@ This node gives the same topics and message types, so code written for the robot
   /left_gripper/gripper_command     unix_msgs/GripperCommand    command.position 0 open .. 1 closed
   /right_gripper/gripper_command    unix_msgs/GripperCommand
   /lifting_controller/joint_states, /left_gripper/joint_states, /right_gripper/joint_states (state out)
-  /can0|can1/joint_*/enable|disable  std_srvs/Trigger            always succeed (mock hardware has no torque to drop)
+  /can0|can1/joint_*/enable|disable|recover  std_srvs/Trigger    always succeed (mock hardware has no torque to drop)
 
 Started by mock_sim.launch.py. The gripper topics need unix_msgs sourced before the launch.
 """
@@ -62,7 +62,7 @@ class RobotTopics(Node):
         self.traj = {j: self.create_publisher(JointTrajectory, f"/{c}/joint_trajectory", 10) for j, (c, _) in JOINTS.items()}
         self.state = {j: self.create_publisher(JointState, t, 10) for j, (_, t) in JOINTS.items()}
         self.create_subscription(JointState, "/joint_states", self.on_states, 10)
-        self.can = [self.create_service(Trigger, can_service(j, v), self.ok) for j in ARMS for v in ("enable", "disable")]
+        self.can = [self.create_service(Trigger, can_service(j, v), self.ok) for j in ARMS for v in ("enable", "disable", "recover")]
         self.create_subscription(JointState, "/lifting_controller/commands",
                                  lambda m: self.move("body_joint", lift_goal(m, self.pos.get("body_joint", 0.0))), 10)
         try:

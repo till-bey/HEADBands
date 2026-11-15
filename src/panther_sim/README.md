@@ -53,7 +53,7 @@ The robot's command topics work here, with the robot's message types:
 | `lifting_controller`, `/lifting_controller/commands` (JointState: `position` m, or `velocity` m/s) | `robot_topics` → `lifting_controller` (a trajectory controller here) | `body_joint`, 0 (bottom) to 0.8 m (top), at most 0.05 m/s |
 | `left_` / `right_unix_gripper3_controller`, `/left_gripper/gripper_command`, `/right_gripper/gripper_command` (`unix_msgs/GripperCommand`) | `robot_topics` → `left_` / `right_unix_gripper3_controller` (trajectory controllers here) | `joint_lf` / `joint_rf`, 0 open to 1 closed |
 | `/lifting_controller/joint_states`, `/left_gripper/joint_states`, `/right_gripper/joint_states` | published by `robot_topics` | |
-| `/can0/joint_la*/enable\|disable`, `/can1/joint_ra*/enable\|disable` (`std_srvs/Trigger`) | served by `robot_topics`, always succeed | mock hardware has no torque to drop |
+| `/can0/joint_la*/enable\|disable\|recover`, `/can1/joint_ra*/enable\|disable\|recover` (`std_srvs/Trigger`) | served by `robot_topics`, always succeed | mock hardware has no torque to drop |
 | Hardware components `unix_openarm_left`, `unix_openarm_right`, `raw_can0`, `raw_can1`, `mh3_head`, `mh3_movebase` | one mock system each, same joints as on the robot | `set_hardware_component_state` works |
 
 The robot's lift and gripper controllers are vendor plugins that only exist on the robot. Here they are trajectory controllers with the same names, and [`robot_topics`](panther_sim/robot_topics.py), started by the launch file, takes the robot's topics and forwards each command to them as a trajectory. Deactivating a gripper controller (as `teach release` does) stops that gripper, as on the robot. Its behaviour is a guess where the vendor does not document it:
@@ -91,7 +91,7 @@ ros2 action send_goal /left_arm_joint_trajectory_position_controller/follow_join
 
 [`urdf/robot_description.urdf`](urdf/robot_description.urdf) is the robot's own `/robot_description` (xacro output of `mh3_description`). The sim, `cartesian_follow.py`'s IK on the robot, and the `motion/` scripts all use these kinematics. On the robot, `cartesian_follow.py` reads the live `/robot_description` instead.
 
-The meshes are only on the robot, in the `mh3_description` package; they are not public. Without them the launch file draws stand-in geometry: a box base, wheels, a torso column, rods for links, and orange spheres at the moving joints. To use the real meshes, copy them from the robot:
+The meshes are only on the robot, in the `mh3_description` package; they are not public. Without them, the launch files draw stylized stand-ins from [`panther_sim/meshes.py`](panther_sim/meshes.py): rounded shells sized from the URDF joints, written at launch under the vendor file names. They are for looks only, not the vendor shapes. To use the real meshes, copy them from the robot:
 
 ```bash
 scp -r <user>@<robot>:/home/unix_ai/unixai_ws/install/mh3_description/share/mh3_description ~/mh3_description

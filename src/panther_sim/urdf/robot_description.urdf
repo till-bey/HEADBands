@@ -765,7 +765,7 @@
     <parent link="link_la6"/>
     <child link="link_la7"/>
     <axis xyz="0 1 0"/>
-    <limit effort="0" lower="-0.69" upper="0.69" velocity="0"/>
+    <limit effort="0" lower="-1.57" upper="1.57" velocity="0"/>
   </joint>
   <ros2_control name="unix_openarm_left" type="system">
     <hardware>
