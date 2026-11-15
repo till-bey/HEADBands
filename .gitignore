@@ -12,3 +12,9 @@ teach_out/
 data/
 curated/
 .venv
+
+# generated
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*_annotated.mp4
