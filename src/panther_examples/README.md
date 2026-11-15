@@ -9,212 +9,28 @@ Robot scripts. Run them in the container (`docker/run.sh`, or `docker/run.sh --s
 | `ros2 run panther_examples cartesian_follow ...` | Cartesian path for one arm, IK with PyKDL (below) |
 | `ros2 run panther_examples master_gui` | One window for both arms, head, grippers, lift and base ([below](#master-gui)) |
 | `ros2 run panther_examples commands` | Scratchpad of single commands (gripper, base, head, dual arm); edit `main()` |
-| `ros2 run panther_examples pickup ...` | Home, approach, descend, and gripper pickup routine |
+| `ros2 run panther_examples pickup` | Picks a disk up from the floor with both arms ([below](#disk-pickup)) |
 
-# Simulation frisbee pickup
+# Disk pickup
 
-Start the mock simulation in one terminal:
+[`pickup.py`](panther_examples/pickup.py) picks a disk up from the floor by playing the four joint-space key poses in
+[`motion/pickup/key_points/`](../../motion/pickup/key_points/) (`ros2 topic echo /joint_states --once` dumps) on both
+arms:
 
-```bash
-docker/run.sh --sim
-colcon build --symlink-install
-source install/setup.bash
-ros2 launch panther_sim mock_sim.launch.py
-```
+1. lift to `--body-height` (0.2 m), both grippers open, move to `1.txt`, then lower the lift to `--lower-body-height` (0.0 m)
+2. `2.txt`
+3. `3.txt`, then the right gripper to `--scrape-grip` (0.5)
+4. right gripper closed, then `4.txt` (move away)
 
-In a second `docker/run.sh --sim` terminal, first raise the body, open the
-gripper, and place the arm in its home pose:
-
-```bash
-ros2 run panther_examples pickup start \
-	--arm right \
-	--body-height 0.40 \
-	--home-joints 0 -1 0 0 0 0 0 0
-```
-
-Then run the fetch as a separate dry-run. It uses the live arm state left by
-the start command and lowers the body to the fetch height:
+Each pose takes `--phase-seconds` (8 s) with `--between-delay` (1 s) between them. Joints past the URDF limits are clamped with a warning.
 
 ```bash
-ros2 run panther_examples pickup fetch \
-	--arm right \
-	--target-xy 0.65 0.15 \
-	--body-height 0.0 \
-	--floor-z 0.05 \
-	--approach-height 0.25 \
-	--vertical-seconds 2.0 \
-	--approach-seconds 6.0 \
-	--descend-seconds 2.0 \
-	--dry-run
+ros2 run panther_examples pickup --dry-run   # load and check the key poses only
+ros2 run panther_examples pickup
 ```
 
-If the default home forward-kinematics position is not a good pickup start,
-override it in `body_link` Cartesian coordinates:
-
-```bash
---start-xyz 0.45 0.00 0.70
-```
-
-The legacy `--start-xyz` option is still available for fetch diagnostics, but
-the normal start position is now the live state produced by `pickup start`.
-
-To execute the tuned Cartesian CSV before the generated fetch, run:
-
-```bash
-ros2 run panther_examples pickup hardcoded \
-	--arm right \
-	--hardcoded-path /workspace/motion/pickup/hardcoded_pickup.csv \
-	--body-height 0.0
-```
-
-The home joints are loaded from `/workspace/motion/pickup/start.txt` by
-default. The full intended sequence is therefore `start`, `hardcoded`, then
-`fetch`; each command reads the live joint state from the previous command.
-
-### Current pickup sequence
-
-The current operational sequence is:
-
-```bash
-ros2 run panther_examples pickup start \
-	--arm right \
-	--body-height 0.4
-
-ros2 run panther_examples pickup start \
-	--arm left \
-	--body-height 0.4
-
-ros2 run panther_examples pickup start \
-	--arm left \
-	--body-height 0.0
-
-ros2 run panther_examples cartesian_follow \
-	--arm right \
-	--path /workspace/motion/pickup/hardcoded_pickup.csv
-
-ros2 run panther_examples pickup fetch \
-	--arm right \
-	--target-xy 0.55 0.0 \
-	--body-height 0.0 \
-	--floor-z 0.15 \
-	--approach-height 0.2
-```
-
-Adjust `--target-xy`, `--floor-z`, and `--approach-height` in the final
-command for each detected object and desired hand clearance.
-
-### Current scrape pickup sequence
-
-```bash
-ros2 run panther_examples pickup start \
-	--arm right \
-	--body-height 0.4
-
-ros2 run panther_examples pickup start \
-	--arm left \
-	--body-height 0.0
-
-ros2 run panther_examples pickup scrape_prepare_position \
-	--body-height 0.2 \
-	--key-point-dir /workspace/motion/pickup/key_points \
-	--time-scale 2.0
-
-ros2 run panther_examples pickup scrape_prepare \
-	--body-height 0.2 \
-	--key-point-dir /workspace/motion/pickup/key_points \
-	--time-scale 2.0
-
-ros2 run panther_examples pickup scrape_execute \
-	--body-height 0.2 \
-	--key-point-dir /workspace/motion/pickup/key_points \
-	--time-scale 2.0
-
-ros2 run panther_examples pickup scrape_move_away \
-	--body-height 0.2 \
-	--key-point-dir /workspace/motion/pickup/key_points \
-	--time-scale 2.0
-```
-
-The dry-run publishes `/cartesian_follow/planned_path` for RViz and does not
-move the arm or close the gripper. Remove `--dry-run` only after inspecting the
-path. For a camera pixel target, replace `--target-xy` with:
-
-```bash
---calibration /workspace/motion/pickup/models/camera_floor.json \
---target-pixel 1622 720
-```
-
-During a failed dry-run, compare these RViz `Path` topics:
-
-- `/sim_frisbee_pickup/requested_path`: the full requested Cartesian path
-- `/cartesian_follow/planned_path`: the reachable IK prefix
-
-The terminal also prints the first failed waypoint and its requested XYZ pose.
-
-The four phases play `key_points/1.txt` through `key_points/4.txt` directly in
-joint space. The combined sequence first moves to `key_points/1.txt`, then
-lowers the body to `--lower-body-height` before continuing with the remaining
-poses. `scrape_execute` moves the right gripper to `--scrape-grip`
-(default `0.5`); `scrape_move_away` closes it continuously to full closure over
-`--gripper-close-seconds` (default `2.0`). The left gripper stays open.
-
-Run all four phases with one command and a one-second pause between them:
-
-```bash
-ros2 run panther_examples pickup scrape_sequence \
-	--key-point-dir /workspace/motion/pickup/key_points \
-	--body-height 0.2 \
-	--lower-body-height 0.0 \
-	--scrape-grip 0.5 \
-	--gripper-close-seconds 2.0 \
-	--time-scale 2.0 \
-	--between-delay 1.0
-```
-
-Use `--between-delay 0.0` for no pause, or increase it to leave more time
-between key poses.
-
-The default fetch planner is deterministic Cartesian motion: vertical stage,
-lateral stage, then descent. To opt into the learned SEDS approach instead,
-provide `--use-seds` and a model:
-
-```bash
-ros2 run panther_examples pickup \
-	--use-seds \
-	--model /workspace/motion/pickup/models/pickup_seds_g8.npz \
-	--arm right \
-	--target-xy 0.65 0.15 \
-	--body-height 0.40 \
-	--floor-z 0.05 \
-	--approach-height 0.25 \
-	--dry-run
-```
-
-`start` defaults to body height 0.4 m; `fetch` defaults to body height 0.0 m.
-The fetch command lowers the body, approaches above the target, descends to
-`--floor-z`, and closes the gripper. `--floor-z` is the hand's test clearance
-above the base floor in metres. The node converts it into `body_link`, where
-it may correctly be negative because `body_link` is above the floor.
-`--body-height` is the separate torso/lift height.
-
-The pickup node can run against the real robot as well as the mock simulation.
-Use `--dry-run` first, verify the RViz path and reachable-prefix output, keep
-people clear of both arms, and confirm the active ROS domain before removing
-`--dry-run`.
-
-The generated fetch keeps the wrist orientation from the live arm state by
-default. The hardcoded CSV uses its own orientation columns. Override the
-rough default home pose with eight values using `--home-joints`.
-
-If the path fails at a later waypoint, the node reports the waypoint index and
-publishes the reachable IK prefix to RViz. The planner automatically retries
-speed-limit failures with 2x, 4x, and 8x retiming before giving up.
-
-If IK rejects a waypoint during `--dry-run`, the requested Cartesian path is
-still published on `/cartesian_follow/planned_path` as a straight marker path.
-That lets you inspect the target in RViz even though it is not executable. The
-printed `floor z` is the target height in `body_link`; a high `--body-height`
-can make the floor unreachable because the arm has to reach farther downward.
+From the web interface, say or type **"pick up the disk"**: the bridge plays the same sequence as one trajectory
+(`swiss_robot_bridge.local_safety.pickup_points`), after confirmation.
 
 # Master GUI
 

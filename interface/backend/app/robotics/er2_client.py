@@ -150,7 +150,7 @@ def _spec_to_proposal(spec: ExplicitClauseSpec, *, fallback_speed: float | None 
         action=act,
         target=tgt,
         yaw_rad=spec.yaw_rad if act == AllowedActionType.ROTATE else None,
-        object_label="frisbee" if act == AllowedActionType.THROW_OBJECT else None,
+        object_label={AllowedActionType.THROW_OBJECT: "frisbee", AllowedActionType.PICK_OBJECT: "disk"}.get(act),
         speed=spd,
         requires_confirmation=act not in (AllowedActionType.STOP, AllowedActionType.MOVE_HEAD),
         rationale=spec.rationale,
@@ -261,6 +261,11 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                     f"head_pitch_rad={spec.head_pitch_rad}, head_yaw_rad={spec.head_yaw_rad} (null = keep), "
                     "target=null, yaw_rad=null; the base does NOT rotate"
                 )
+            elif spec.action == "pick_object":
+                lines.append(
+                    f'- Clause {idx + 1} ("{spec.clause}"): action=pick_object, object_label=disk, target=null, '
+                    "one step; never merge or drop it"
+                )
             elif spec.action == "throw_object":
                 lines.append(
                     f'- Clause {idx + 1} ("{spec.clause}"): action=throw_object, object_label=frisbee, '
@@ -308,6 +313,8 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                     elif spec.action == "throw_object":
                         prop.object_label = prop.object_label or "frisbee"
                         prop.throw_variant = spec.throw_variant
+                    elif spec.action == "pick_object":
+                        prop.object_label, prop.target = "disk", None
                     elif spec.action == "move_head":
                         _apply_head_spec(prop, spec)
                 return proposals
@@ -358,6 +365,8 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                 elif spec.action == "throw_object":
                     prop.object_label = prop.object_label or "frisbee"
                     prop.throw_variant = spec.throw_variant
+                elif spec.action == "pick_object":
+                    prop.object_label, prop.target = "disk", None
                 prop_cursor = j + 1
                 matched = True
                 break
@@ -371,6 +380,9 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                 insert_at = picks[0] + 1 if picks else len(proposals)
                 proposals.insert(insert_at, _spec_to_proposal(spec))
                 prop_cursor = insert_at + 1
+            elif not matched and spec.action == "pick_object":
+                proposals.insert(prop_cursor, _spec_to_proposal(spec))
+                prop_cursor += 1
             elif not matched and spec.action == "move_head":
                 # ER 2 dropped an explicit head command: restore it in order (no confirmation needed,
                 # like look_at; the bridge clamps and smooths it).

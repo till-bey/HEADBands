@@ -575,7 +575,7 @@ class ROS2HardwareAdapter:
                 (now + t_s, (vals.get(HEAD_JOINTS[0]), vals.get(HEAD_JOINTS[1]))) for t_s, vals in rows
             ]
         events: list[tuple[float, str, float]] = []
-        for g in grippers:
+        for g in grippers + (["body_joint"] if "body_joint" in names else []):  # the pickup lowers the lift mid-way
             last = None
             for t_s, vals in rows:
                 if g in vals and vals[g] != last:
@@ -593,7 +593,10 @@ class ROS2HardwareAdapter:
             yaw = cur_y if sample[1] is None else float(sample[1])
             self._send_head(pitch, yaw)
         for joint, value in self._gripper_stream.due(now):
-            self.publish_gripper("left" if joint == "joint_lf" else "right", value, 1.0)
+            if joint == "body_joint":
+                self.publish_lift(value, LIFT_MAX_VEL_MPS)
+            else:
+                self.publish_gripper("left" if joint == "joint_lf" else "right", value, 1.0)
 
     def apply_manual(self, cmd: ManualCommand) -> None:
         """Joint targets from the manual panel (already checked by LocalSafetySupervisor.check_manual).
@@ -644,7 +647,7 @@ class ROS2HardwareAdapter:
             self.publish_lift(plan.lift_position_m, plan.lift_velocity_mps)
 
         if plan.master_trajectory_points:
-            if plan.action in ("generated_gesture", "throw_object") and plan.master_trajectory_joints:
+            if plan.master_trajectory_joints:
                 # The arm may be anywhere: give it time to reach the first point slowly.
                 plan.master_trajectory_points = retime_from_current_pose(
                     tuple(plan.master_trajectory_joints), plan.master_trajectory_points, self.joint_positions

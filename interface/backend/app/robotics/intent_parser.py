@@ -246,6 +246,11 @@ THROW_VARIANT_WORDS: dict[str, re.Pattern[str]] = {
 }
 
 
+# The floor disk pickup the bridge plays (pick_object with object_label "disk", panther_topics.PICKUP_DIR).
+_PICKUP_DISK_RE = re.compile(r"\bpick\s+up\s+the\s+dis[ck]\b", re.IGNORECASE)
+PICKUP_DISK_RATIONALE = "Pick the disk up from the floor with both arms (key-pose pickup)"
+
+
 def throw_variant(text: str) -> str | None:
     """The throw version named in an instruction, or None for the standard throw."""
     return next((name for name, words in THROW_VARIANT_WORDS.items() if words.search(text)), None)
@@ -709,6 +714,15 @@ def parse_explicit_clause_spec(text: str, language: str = "auto") -> ExplicitCla
             rationale=f"Set Panther torso lift z={z_m:g}m ({language}): {cleaned[:120]}",
         )
 
+    if _PICKUP_DISK_RE.search(cleaned):
+        return ExplicitClauseSpec(
+            clause=cleaned,
+            action="pick_object",
+            speed=0.25,
+            has_explicit_number=True,
+            rationale=f"{PICKUP_DISK_RATIONALE} ({language}): {cleaned[:120]}",
+        )
+
     if _THROW_OBJECT_RE.search(cleaned):
         return ExplicitClauseSpec(
             clause=cleaned,
@@ -855,7 +869,16 @@ def parse_multilingual_robot_intent(text: str, language: str = "auto") -> tuple[
             "rationale": f"Set Panther torso lift z={z_m:g}m ({language}): {cleaned[:120]}",
         }
 
-    # 3c. Retargeted Frisbee Throw (`throw_object` on `/master_controller/joint_trajectory`)
+    # 3c. Floor disk pickup (`pick_object`, object_label "disk": the bridge plays the key poses)
+    if _PICKUP_DISK_RE.search(cleaned):
+        return "propose_robot_action", {
+            "action": "pick_object",
+            "object_label": "disk",
+            "speed": 0.25,
+            "rationale": f"{PICKUP_DISK_RATIONALE} ({language}): {cleaned[:120]}",
+        }
+
+    # 3c'. Retargeted Frisbee Throw (`throw_object` on `/master_controller/joint_trajectory`)
     if _THROW_OBJECT_RE.search(cleaned):
         return "propose_robot_action", {
             "action": "throw_object",

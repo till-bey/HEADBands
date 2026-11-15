@@ -33,6 +33,12 @@ from swiss_robot_bridge.panther_topics import (
     LIFT_MAX_VEL_MPS,
     LIFT_MIN_M,
     DEFAULT_THROW,
+    LEFT_ARM_JOINTS,
+    PICKUP_DIR,
+    PICKUP_PAUSE_S,
+    PICKUP_PHASE_S,
+    PICKUP_SCRAPE_GRIP,
+    PICKUP_START_LIFT_M,
     THROW_DIR,
     THROW_FILES,
     THROW_PAUSE_S,
@@ -164,6 +170,48 @@ def throw_points(speed: float, variant: str | None = None) -> list[tuple[float, 
     ]
 
 
+def load_key_pose(path: Path) -> tuple[float, ...]:
+    """Both arms' joints (joint_la0..7, joint_ra0..7) from one `ros2 topic echo /joint_states --once` dump,
+    clamped to ARM_JOINT_LIMITS as `panther_examples pickup` does."""
+    lists: dict[str, list[str]] = {}
+    key = None
+    for line in path.read_text().splitlines():
+        if line.endswith(":") and not line.startswith(" "):
+            key = line[:-1]
+            lists[key] = []
+        elif line.startswith("- ") and key is not None:
+            lists[key].append(line[2:].strip())
+    pose = dict(zip(lists.get("name", []), (float(v) for v in lists.get("position", []))))
+    missing = [j for j in LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS if j not in pose]
+    if missing or not all(math.isfinite(v) for v in pose.values()):
+        raise ValueError(f"{path.name}: missing or non-finite joints {missing}")
+    return tuple(_clamp(pose[j], *ARM_JOINT_LIMITS[j]) for j in LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS)
+
+
+# Loaded once, like THROWS: a missing or bad key pose stops the bridge at start.
+PICKUP_POSES = [load_key_pose(PICKUP_DIR / f"{i}.txt") for i in range(1, 5)]
+PICKUP_JOINTS = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS + ("joint_lf", "joint_rf", "body_joint")
+
+
+def pickup_points() -> list[tuple[float, tuple[float, ...], float | None]]:
+    """The disk pickup on PICKUP_JOINTS: each key pose reached, then held PICKUP_PAUSE_S. Grippers open and the lift
+    lowered to 0 once pose 1 is reached, right gripper to PICKUP_SCRAPE_GRIP at pose 3 and closed as pose 4 starts.
+    The lift goes to PICKUP_START_LIFT_M with the plan, before the first point."""
+    # (joint_lf, joint_rf, body_joint) on reaching each pose, and on the hold before it
+    reach = [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, PICKUP_SCRAPE_GRIP, 0.0), (0.0, GRIPPER_CLOSED_POS, 0.0)]
+    hold = [None, reach[0], reach[1], reach[3]]  # the gripper closes as the move away starts, not at its end
+    pts: list[tuple[float, tuple[float, ...], float | None]] = []
+    t = PICKUP_PHASE_S  # the first move is timed from the arm's actual pose by retime_from_current_pose
+    for i, q in enumerate(PICKUP_POSES):
+        if i:
+            prev = PICKUP_POSES[i - 1]
+            t += PICKUP_PAUSE_S
+            pts.append((round(t, 4), prev + hold[i], None))
+            t += max(PICKUP_PHASE_S, max(abs(a - b) for a, b in zip(q, prev)) / (MAX_ARM_JOINT_VEL_RPS * 0.9))
+        pts.append((round(t, 4), q + reach[i], None))
+    return pts
+
+
 def retime_from_current_pose(
     names: tuple[str, ...],
     points: list[tuple[float, tuple[float, ...], float | None]],
@@ -171,8 +219,8 @@ def retime_from_current_pose(
     max_vel: float = MAX_ARM_JOINT_VEL_RPS * 0.9,
 ) -> list[tuple[float, tuple[float, ...], float | None]]:
     """Delay the trajectory if the arm's actual pose is too far from the first point for max_vel."""
-    # zip: a throw names its gripper (joint_rf) too, but its points hold only the arm positions
-    pairs = list(zip(names, points[0][1])) if points else []
+    # arm joints only: a throw or the pickup also names grippers or the lift
+    pairs = [(n, q) for n, q in zip(names, points[0][1]) if n in ARM_JOINT_LIMITS] if points else []
     if not pairs or not all(n in current for n, _ in pairs):
         return points
     gap = max(abs(q - float(current[n])) for n, q in pairs)
@@ -701,6 +749,13 @@ class LocalSafetySupervisor:
             plan.head_positions = self._compute_head_joints(cmd)
             plan.head_targets = self._head_targets(cmd)
             plan.trigger_camera = True
+
+        elif cmd.action == "pick_object" and (cmd.object_label or "").strip().lower() == "disk":
+            plan.lift_position_m = PICKUP_START_LIFT_M
+            plan.master_trajectory_joints = PICKUP_JOINTS
+            plan.master_trajectory_points = pickup_points()
+            plan.trajectory_duration_seconds = plan.master_trajectory_points[-1][0]
+            plan.switch_arm_trajectory_controllers = True
 
         elif cmd.action == "pick_object":
             plan.gripper_side = self._select_gripper_side(cmd)
