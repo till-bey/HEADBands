@@ -5,6 +5,10 @@
 !/src/frisbee_msgs/
 !/src/frisbee_interception/
 !/src/unix_msgs/
+!/src/panther_examples/
+!/src/panther_sim/
+/src/panther_sim/*
+!/src/panther_sim/urdf/
 !/perception/
 /perception/*
 !/perception/Dataset/

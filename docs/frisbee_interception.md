@@ -186,9 +186,9 @@ The interceptor uses the TF only if it exists, and logs a warning otherwise.
 
 ### 5.3 Catching plane (metric mode)
 
-`catch_plane.point` and `catch_plane.normal` in `target_frame`. For example, a vertical plane 0.45 m in front of
-`body_link` is `point [0.45, 0, 0]`, `normal [1, 0, 0]`. Choose it where the hand can actually be (check with
-`cartesian_follow --dry-run`). Then set `safety.workspace_min/max` to a box the arm can reach safely.
+`catch_plane.point` and `catch_plane.normal` in `target_frame`. The default is the hands' plane of the catching
+pose computed from the URDF (§6b): `point [0.45, 0, -0.20]`, `normal [1, 0, 0]`. `safety.workspace_min/max`
+defaults to that pose ± the 10 cm correction range.
 
 ### 5.4 Image-mode calibration (no intrinsics / TF yet)
 
@@ -216,77 +216,89 @@ The interceptor uses the TF only if it exists, and logs a warning otherwise.
   ≤ `max_target_step_m`. Each withheld target is logged with its reason.
 - Watchdog: if tracks stop for `track_timeout_s`, an explicit `valid=false` is published and the target memory is
   cleared.
-- Existing low-level limits (controller limits, `MAX_JOINT_VEL`, e-stop) are untouched. No joint command is
-  published.
+- Existing low-level limits (controller limits, `MAX_JOINT_VEL`, e-stop) are untouched. The interceptor never
+  commands the robot; only `frisbee_catch_trigger`, when armed, sends small trajectory corrections and gripper
+  closes through the existing controllers (§6b).
 
 ---
 
-## 6b. Catch at the chest (the goal): fixed catching pose + timed gripper close
+## 6b. Catch at the chest (the goal): catching pose from the URDF, small corrections, timed grip
 
-The robot does **not** chase the disc. It holds a catching pose, the thrower aims at its chest, and the only thing
-decided in real time is **when to close the grippers**. That needs only the arrival time, which is what the
-predictor gives, and no arm motion during the throw.
+The robot does **not** chase the disc. It holds a catching pose, the thrower aims at its chest, and per throw it
+only (1) shifts both hands a little toward the predicted catch point and (2) closes the grippers when the disc
+arrives.
 
 ```
-teach play (catching pose, before the throw) ──► arms + grippers open, held by the existing controllers
-camera on the robot, looking at the thrower ─► detector → tracker → interceptor ─► /frisbee/intercept
-frisbee_catch_trigger: crossing pixel inside catch window? confident? ─► close at (arrival − gripper latency)
-                                                 └─► /left_gripper/gripper_command, /right_gripper/gripper_command
+frisbee_catch_pose (URDF → IK) ─► catch_pose_{left,right}.csv ─► cartesian_follow --joints (existing tool, once)
+camera, looking at the thrower ─► detector → tracker → interceptor ─► /frisbee/intercept (catch point in body_link)
+frisbee_catch_trigger (armed):
+   ├─ correction: both hands shift by (dy, dz) ≤ 10 cm in the catching plane ─► <arm>_arm_joint_trajectory_position_controller
+   └─ grip: close at (arrival − gripper latency) ─► /left_gripper/gripper_command, /right_gripper/gripper_command
 ```
 
-`frisbee_catch_trigger` sends `unix_msgs/GripperCommand`, built exactly like `panther_examples/teach.py` does
-(`mode: parallel`, right gripper capped at 0.67 like `master_gui`). It never commands arms or the lift. It is
-**disarmed by default**: it then publishes `would_fire` on `/frisbee/catch_event` at the moment it would have closed,
-so the timing can be checked on real throws first.
+**Catching pose** (`core/catch_pose.py`, computed from `robot_description.urdf`; numpy FK/IK, checked against
+`cartesian_follow`'s PyKDL chain in CI):
+
+| | value (body_link, m) |
+|---|---|
+| center between the hands | (0.45, 0.00, −0.20): 45 cm in front of and 20 cm below the shoulders |
+| left / right gripper (`link_lf` / `link_rf`) | (0.45, +0.13, −0.20) / (0.45, −0.13, −0.20) |
+| hand orientation | fingers point at the thrower (+x), fingers close vertically: they pinch the front rim of a disc flying flat |
+| joint-limit margin | ≥ 0.26 rad on every joint of both arms |
+| correction range | ±10 cm in y and z (hands may tilt ≤ 10° while correcting) |
+| joint motion for a correction | ≤ 0.20 rad for 5 cm, ≤ 0.36 rad for 10 cm → **0.4 s / 0.7 s at the 0.5 rad/s cap** |
+
+The centre was chosen by search: with the exact hand orientation, only centres around x = 0.40–0.45, z = −0.20 to
+−0.25 keep the full ±10 cm correction range reachable, and (0.45, −0.20) needs the least joint motion. Change it with
+`frisbee_catch_pose --center X Y Z`, then keep `catch_pose.center` and the interceptor's `catch_plane` in sync.
+
+**Corrections** use the existing trajectory controllers with the same controller switch as `cartesian_follow`
+(forward controller off, both arm JTCs on; restored on disarm). A new goal is sent only when the target moved by
+≥ 1.5 cm, each goal is timed so no joint exceeds the 0.5 rad/s cap, and the hands never go further than
+`max_correction_m` from the pose. The gripper close is sent like `panther_examples/teach.py` does (`mode: parallel`,
+right gripper capped at 0.67 like `master_gui`). Lift and head are never commanded.
+
+**Disarmed by default.** It then publishes `would_correct` / `would_fire` on `/frisbee/catch_event`, so the timing
+can be checked on real throws without moving anything. Arming (`~/enable`) is refused unless:
+- `gripper_latency_s` and `catch_window_px` are measured, **and**
+- the arms are within 0.05 rad of the catching pose (from `/joint_states`), **and**
+- both trajectory controllers are loaded and the switch succeeds.
 
 **Procedure**
 
-1. **Catching pose.** Put the arms where the disc should land (in front of the chest, grippers open, rims at
-   disc height), using the existing tools:
-   `ros2 run panther_examples teach record --seconds 10` (move the arms by hand into the pose), then
-   `teach action` and `ros2 run panther_examples teach play --yes`.
-2. **Camera.** Mount it on the robot at chest height, looking at the thrower (the phone, or the robot's camera with
-   `use_phone_camera:=false`). It must not move during the throw (`detection.method: background`).
-3. **Catch size** (`frisbee_interceptor/prediction.catch_diameter_px`). Hold the disc face-on between the open
-   grippers and read `major_px` from `/frisbee/detections`.
-4. **Catch window** (`frisbee_catch_trigger/catch.catch_window_px`). Still holding it there, note its center pixel.
-   Move it to the left/right/top/bottom limits the grippers can still close on, and set `[u0, v0, u1, v1]`.
-   Throws predicted to cross outside it are ignored (logged as "throw will miss the catch window").
-5. **Gripper latency** (`catch.gripper_latency_s`). Film the gripper at 120–240 fps while sending one close command
-   (for example `ros2 topic pub --once /left_gripper/gripper_command unix_msgs/msg/GripperCommand ...`) and count
-   the frames until it is closed far enough to hold a rim. Until this is set (it is −1), **arming is refused**.
-6. **Dry run.** Launch and watch `ros2 topic echo /frisbee/catch_event`. Every throw at the chest should give one
-   `planned` and one `would_fire` slightly before the disc arrives.
-7. **Arm** (operator at the e-stop):
-   `ros2 service call /frisbee_catch_trigger/enable std_srvs/srv/SetBool "{data: true}"`.
-   Disarm: `ros2 topic pub --once /frisbee/disable std_msgs/msg/Empty {}`, which disarms this node and the
-   interceptor.
+1. **Compute the pose** (on the robot, from its live `/robot_description`, or from the file):
+   `ros2 run frisbee_interception frisbee_catch_pose --out ~/catch_pose`
+2. **Move into it** with the existing tool, dry run first, operator at the e-stop:
+   `ros2 run panther_examples cartesian_follow --arm left --joints ~/catch_pose/catch_pose_left.csv --dry-run`, then
+   without `--dry-run`, and the same for `--arm right`. The CSVs open the grippers (last column 0).
+3. **Camera**: the robot's own RGB-D camera (`link_rgbd` is in the URDF, so its TF to `body_link` comes from
+   `robot_state_publisher`; use `use_phone_camera:=false image_topic:=... camera_info_topic:=...`) or a phone with a
+   measured static TF (§5.2). It must not move during the throw (`detection.method: background`). With intrinsics +
+   TF, the interceptor runs in metric mode, and its `catch_plane` (x = 0.45) is the hands' plane.
+4. **Catch window** (`catch.catch_window_px`): hold the disc between the open grippers, note its pixel, and move it
+   to the ±10 cm limits; set `[u0, v0, u1, v1]`.
+5. **Gripper latency** (`catch.gripper_latency_s`): film one close command at 120–240 fps and count the frames
+   until the fingers would hold a rim. Arming is refused while it is −1.
+6. **Dry run**: launch with `config:=` your YAML (set `corrections.pose_file: ~/catch_pose/catch_pose.json`) and
+   watch `ros2 topic echo /frisbee/catch_event`: each throw should give `planned`, `would_correct` and `would_fire`.
+7. **Arm**: `ros2 service call /frisbee_catch_trigger/enable std_srvs/srv/SetBool "{data: true}"`.
+   **Disarm**: `ros2 topic pub --once /frisbee/disable std_msgs/msg/Empty {}`. This stops corrections and grips,
+   and switches back to the forward controller.
 
-**Timing budget.** The first valid prediction must come at least one gripper latency before arrival. In the
-2026-11-15 clips (3–5 m, 30 fps) it came 0.02–0.075 s before arrival, which is enough only for a very fast gripper.
-With throws from 8–10 m at 60 fps, the synthetic tests give 0.45–0.65 s, enough for any gripper. In the CI the
-trigger closes once per throw, about one latency before the true arrival (within 0.06 s).
+**Timing budget.** A correction needs about 0.4 s (5 cm) to 0.7 s (10 cm) at 0.5 rad/s, plus the gripper latency.
+The first valid prediction must come that long before arrival. That holds for throws from 8–10 m at ≥ 60 fps
+(synthetic: 0.45–0.65 s), but **not** for the 2026-11-15 clips (3–5 m at 30 fps: 0.02–0.075 s). With too little
+time the correction is still sent (`in_time: false` in the event) and the grip still closes on time. `MAX_JOINT_VEL`
+is "our choice" in `panther_examples/robot.py`; raising it would shorten corrections, but that must be validated on
+the robot first and was not changed here.
 
-## 7. Controller integration for moving the hand (not done: proposal)
+## 7. What is not done
 
-No existing interface accepts a Cartesian target, and the task says not to add a second controller. So
-`/frisbee/catch_target` is **not connected** to anything. The smallest change that would connect it reuses what
-already exists:
-
-1. Move the IK and timing in `cartesian_follow.py` (`Chain`, `plan`, `timed`) into a small long-running node
-   `catch_follow` (same package). It subscribes to `/frisbee/catch_target` (`PointStamped` in `body_link`), uses a
-   fixed catching orientation, and solves IK seeded with `/joint_states`.
-2. It sends **one** `FollowJointTrajectory` goal to the existing `<arm>_arm_joint_trajectory_position_controller`,
-   with the same controller switch `cartesian_follow` already does, and keeps the `MAX_JOINT_VEL` cap.
-3. It cancels or replaces the goal when a new target arrives (`max_target_step_m` already bounds jumps), and it
-   cancels on `/frisbee/disable`.
-
-That is about 100 lines and needs no new controller, no new message, and no change to `ros2_control`. It was left
-out on purpose because it moves the arm, and the timing below makes it unlikely to help yet.
-
-**Feasibility:** at 0.5 rad/s, a 0.3 rad joint move takes ≥0.6 s. A 10 m throw at 10 m/s gives at most ~0.6 s of
-valid prediction, and in the recorded clips the disc is visible for only 0.27 s. Real catching needs a pre-positioned
-hand, short corrections, and higher joint speeds, and those must be validated on the robot with the vendor.
+- Nothing was run on the real robot or in Gazebo here. CI uses a mock of the robot's ROS interfaces (joint states,
+  controller manager, trajectory actions) and checks the commands sent, not the physical catch.
+- The gripper geometry (finger opening, which rim thickness it can hold) is not in the URDF; whether a pinch on
+  the rim holds a fast disc must be tried by hand first (throw slowly into the posed, open grippers).
+- The robot camera's intrinsics (`camera_info`) and its image orientation were not checked on the robot.
 
 ---
 

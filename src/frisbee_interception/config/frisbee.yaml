@@ -65,11 +65,11 @@ frisbee_interceptor:
       fy: 0.0
       cx: 0.0
       cy: 0.0
-    # Catching plane in target_frame (metric mode). Unset -> metric mode off. Example, NOT measured:
-    # point: [0.45, 0.0, 0.0], normal: [1.0, 0.0, 0.0]  (a vertical plane 0.45 m in front of body_link)
+    # Catching plane in target_frame (metric mode): the plane of the hands in the catching pose computed from the
+    # URDF (frisbee_catch_pose: center [0.45, 0, -0.20]); keep both in sync. Metric mode also needs intrinsics + TF.
     catch_plane:
-      point: [0.0]
-      normal: [0.0]
+      point: [0.45, 0.0, -0.20]
+      normal: [1.0, 0.0, 0.0]
     # Image-mode calibration (no intrinsics / no TF): see "Catching-plane calibration" in the docs.
     image_calibration:
       homography: [0.0]             # 9 numbers, pixel -> (a, b) metres on the catching plane
@@ -95,16 +95,18 @@ frisbee_interceptor:
       max_data_age_s: 0.25          # older camera data is never used
       track_timeout_s: 0.5          # publish 'invalid' when tracks stop arriving
       min_confidence: 0.5           # catch targets need at least this prediction confidence
-      workspace_min: [0.0]          # target_frame box [x y z]; unset -> no catch target is ever sent
-      workspace_max: [0.0]
+      workspace_min: [0.40, -0.25, -0.35]  # catching pose +/- max correction (+ margin), body_link
+      workspace_max: [0.50, 0.25, -0.05]
       max_target_step_m: 0.3        # refuse a new target this far from the previous one
       min_time_to_intercept_s: 0.1
     interception:
       enabled: false                # prediction-only. Arm with ~/enable_interception, disarm with /frisbee/disable
 
-# Catch at the chest: the robot is already in its catching pose (panther_examples teach play --yes); this node
-# only closes the grippers when a throw aimed at the chest arrives. Disarmed by default (dry run: it publishes
-# "would_fire" on /frisbee/catch_event). Arm: ros2 service call /frisbee_catch_trigger/enable std_srvs/srv/SetBool "{data: true}"
+# Catch at the chest. Before: arms in the catching pose computed from the URDF (frisbee_catch_pose), moved there
+# with panther_examples cartesian_follow --joints. Once armed, per throw: small hand corrections toward the predicted
+# catch point (existing trajectory controllers, <= max_correction_m, <= max_joint_vel) and the grippers close at
+# arrival - latency. Disarmed by default (dry run: would_correct / would_fire on /frisbee/catch_event).
+# Arm: ros2 service call /frisbee_catch_trigger/enable std_srvs/srv/SetBool "{data: true}"
 frisbee_catch_trigger:
   ros__parameters:
     gripper_topics: ["/left_gripper/gripper_command", "/right_gripper/gripper_command"]
@@ -119,3 +121,17 @@ frisbee_catch_trigger:
       min_lead_s: 0.0
       max_late_s: 0.03
       refractory_s: 2.0
+    corrections:
+      enabled: true                 # false: grippers only, the arms never move
+      pose_file: ""                 # catch_pose.json from frisbee_catch_pose (else solved at start-up, ~40 s)
+      max_joint_vel: 0.5            # rad/s, never above panther_examples MAX_JOINT_VEL (0.5)
+      min_resend_m: 0.015           # send a new correction only if the target moved this much
+      pose_tolerance_rad: 0.05      # arming refused unless every arm joint is this close to the catching pose
+    catch_pose:                     # must match the frisbee_catch_pose arguments and catch_plane above
+      base: body_link
+      center: [0.45, 0.0, -0.20]
+      half_spacing: 0.13
+      max_correction_m: 0.10
+      rot_tol_rad: 0.17
+      samples: 20000
+      seed: 3

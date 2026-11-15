@@ -28,6 +28,7 @@ setup(
             "frisbee_tracker = frisbee_interception.tracker_node:main",
             "frisbee_interceptor = frisbee_interception.interceptor_node:main",
             "frisbee_catch_trigger = frisbee_interception.catch_trigger_node:main",
+            "frisbee_catch_pose = frisbee_interception.catch_pose_cli:main",
             "frisbee_offline = frisbee_interception.offline:main",
         ],
     },

@@ -44,6 +44,8 @@ class Checker(Node):
                                      lambda m, tp=topic: self.grips.append({"wall": time.monotonic(), "topic": tp,
                                                                             "position": list(m.command.position)}), 10)
         self.create_subscription(String, "/frisbee/catch_event", lambda m: self.catch_events.append(json.loads(m.data)), 50)
+        self.mock = None  # last /mock_robot/status (metric run); its times are CLOCK_MONOTONIC like ours
+        self.create_subscription(String, "/mock_robot/status", lambda m: setattr(self, "mock", json.loads(m.data)), 10)
 
     def _det(self, m):
         self.n_det += 1
@@ -85,8 +87,11 @@ def main():
     ap.add_argument("--truth", required=True)
     ap.add_argument("--duration", type=float, default=20.0)
     ap.add_argument("--report", required=True)
+    ap.add_argument("--truth-body", help="metric: true crossing point in body_link")
+    ap.add_argument("--urdf", help="metric: URDF, to check where the corrected hands go (FK)")
     a = ap.parse_args()
     truth = json.load(open(a.truth))["catch"]["1.0"]
+    truth_body = json.load(open(a.truth_body))["point_body"] if a.truth_body else None
 
     rclpy.init()
     n = Checker()
@@ -103,9 +108,15 @@ def main():
         res = n.call_enable(True)
         report["enable_response"] = res
         checks["arming accepted with workspace"] = res is not None and res["success"]
-        cres = n.call_enable(True, n.catch_cli)
+        # the catch node needs the robot description + catching pose first: retry for up to 30 s
+        t_end, cres = time.monotonic() + 30.0, None
+        while time.monotonic() < t_end:
+            cres = n.call_enable(True, n.catch_cli)
+            if cres and cres["success"]:
+                break
+            spin_for(n, 1.0)
         report["catch_enable_response"] = cres
-        checks["catch trigger armed with calibration"] = cres is not None and cres["success"]
+        checks["catch armed (calibration, catching pose, controller switch)"] = cres is not None and cres["success"]
         spin_for(n, a.duration * 0.7)
         n.disable_pub.publish(Empty())
         n.disabled_at = time.monotonic()
@@ -134,7 +145,7 @@ def main():
         checks["no catch target while disarmed"] = len(n.targets) == 0
         checks["grippers never commanded"] = len(n.grips) == 0
     else:
-        errs = [math.dist(i["point"], truth["point_cam"]) for i in valid]
+        errs = [math.dist(i["point"], truth_body) for i in valid]
         report["point_errors_m"] = [round(e, 3) for e in errs]
         checks["metric mode used"] = all(i["mode"] == "metric" for i in valid) and bool(valid)
         checks["catch point within 0.12 m"] = bool(errs) and max(errs) < 0.12
@@ -152,6 +163,48 @@ def main():
             "/left_gripper/gripper_command", "/right_gripper/gripper_command"}
         checks["one close per throw (refractory)"] = 1 <= len(fired) <= 1 + int(a.duration * 0.7 / 2.0)
         checks["no gripper command after /frisbee/disable"] = len(g_after) == 0
+        # ---- hand corrections (mock robot: controller switches and trajectory goals it received)
+        corr = [e for e in n.catch_events if e["event"] == "correction"]
+        report["corrections"] = corr[:10]
+        mock = n.mock or {"switches": [], "goals": []}
+        report["mock_switches"] = mock["switches"]
+        report["mock_goals"] = len(mock["goals"])
+        sw = mock["switches"]
+        traj = {"left_arm_joint_trajectory_position_controller", "right_arm_joint_trajectory_position_controller"}
+        fwd = "dual_arm_forward_position_controller"
+        checks["arming switched to the trajectory controllers"] = bool(sw) and set(sw[0]["activate"]) == traj and \
+            sw[0]["deactivate"] == [fwd]
+        checks["disarming restored the forward controller"] = len(sw) >= 2 and sw[-1]["activate"] == [fwd]
+        checks["corrections sent while armed"] = len(corr) >= 1
+        goals_before = [g for g in mock["goals"] if g["t"] < n.disabled_at]
+        goals_after = [g for g in mock["goals"] if g["t"] > n.disabled_at + 0.3]
+        checks["both arms received accepted goals"] = {g["arm"] for g in goals_before if g["accepted"]} == {"left", "right"}
+        checks["no arm goal after /frisbee/disable"] = len(goals_after) == 0
+        checks["corrections within the joint speed cap"] = all(
+            c["max_joint_change"] / c["duration_s"] <= 0.5 / 1.5 * 1.0001 for c in corr)
+        if a.urdf and goals_before:
+            from frisbee_interception.core.kinematics import ArmChain  # noqa: PLC0415
+
+            urdf = open(a.urdf).read()
+            center = [0.45, 0.0, -0.20]
+            true_off = [max(-0.1, min(0.1, truth_body[1] - center[1])), max(-0.1, min(0.1, truth_body[2] - center[2]))]
+            # 1) the node aims at the predicted point: compare its offsets with the true crossing (prediction error)
+            aim_err = [math.dist(c["offset"], true_off) for c in corr]
+            report["true_offset_m"] = [round(v, 3) for v in true_off]
+            report["aimed_offset_error_m"] = [round(e, 3) for e in aim_err]
+            checks["aimed correction within 5 cm of the true crossing"] = bool(aim_err) and max(aim_err) < 0.05
+            # 2) the hands go where the node aimed (IK + goal): FK of the last goal vs the last correction's offset
+            off = corr[-1]["offset"] if corr else [0.0, 0.0]
+            hand_err = {}
+            for arm, tip, sgn in (("left", "link_lf", 1.0), ("right", "link_rf", -1.0)):
+                last = [g for g in goals_before if g["arm"] == arm and g["accepted"]][-1]
+                ch = ArmChain(urdf, "body_link", tip)
+                q = [last["positions"][last["joint_names"].index(nm)] for nm in ch.names]
+                p = ch.fk(q)[:3, 3]
+                want = [center[0], center[1] + sgn * 0.13 + off[0], center[2] + off[1]]
+                hand_err[arm] = round(math.dist(p.tolist(), want), 4)
+            report["corrected_hand_error_m"] = hand_err
+            checks["corrected hands within 1 cm of the aimed point (FK of the sent goals)"] = max(hand_err.values()) < 0.01
     report["checks"] = checks
     report["passed"] = all(checks.values())
     json.dump(report, open(a.report, "w"), indent=1)

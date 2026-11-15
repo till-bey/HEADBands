@@ -11,9 +11,11 @@ step() { echo; echo "=================== $*"; }
 
 step "dependencies"
 apt-get update -qq && apt-get install -y -qq --no-install-recommends python3-opencv python3-numpy python3-yaml \
-    python3-pytest ros-humble-tf2-ros ros-humble-rmw-cyclonedds-cpp >/dev/null || FAIL=1
+    python3-pytest python3-pykdl ros-humble-tf2-ros ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-control-msgs ros-humble-controller-manager-msgs >/dev/null || FAIL=1
 source /opt/ros/humble/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=42 PYTHONUNBUFFERED=1
+export FRISBEE_TEST_URDF="$PWD/src/panther_sim/urdf/robot_description.urdf"
 python3 -c "import cv2, numpy; print('opencv', cv2.__version__, 'numpy', numpy.__version__)"
 
 step "colcon build"
@@ -23,7 +25,7 @@ cp -r src/unix_msgs src/frisbee_msgs src/frisbee_interception $WS/src/
 (cd $WS && colcon build --event-handlers console_direct+) || { echo "BUILD FAILED"; exit 1; }
 source $WS/install/setup.bash
 
-step "colcon test (unit tests: tracking, prediction, synthetic end-to-end)"
+step "colcon test (tracking, prediction, catch trigger, catching pose, synthetic end-to-end)"
 (cd $WS && colcon test --packages-select frisbee_interception --event-handlers console_direct+ \
     --pytest-args -q && colcon test-result --verbose) || FAIL=1
 cp -r $WS/build/frisbee_interception/test_results "$OUT/" 2>/dev/null || true
@@ -31,27 +33,40 @@ cp -r $WS/build/frisbee_interception/test_results "$OUT/" 2>/dev/null || true
 step "interfaces"
 ros2 interface show frisbee_msgs/msg/FrisbeeIntercept
 
+step "catching pose from the URDF (frisbee_catch_pose) + FK cross-check against panther_examples' PyKDL Chain"
+ros2 run frisbee_interception frisbee_catch_pose --urdf "$FRISBEE_TEST_URDF" --out "$OUT/catch_pose" || FAIL=1
+PYTHONPATH="$PWD/src/panther_examples:$PYTHONPATH" python3 src/frisbee_interception/ci/fk_crosscheck.py \
+    "$FRISBEE_TEST_URDF" "$OUT/catch_pose/catch_pose.json" || FAIL=1
+
 step "synthetic inputs"
 python3 src/frisbee_interception/ci/make_ci_inputs.py "$OUT/synthetic" \
-    "$(ros2 pkg prefix frisbee_interception)/share/frisbee_interception/config/frisbee.yaml" || FAIL=1
+    "$(ros2 pkg prefix frisbee_interception)/share/frisbee_interception/config/frisbee.yaml" \
+    "$OUT/catch_pose/catch_pose.json" || FAIL=1
 
 run_launch() {  # mode extra_launch_args...
     local mode=$1; shift
     step "ROS launch smoke test: $mode"
-    ros2 launch frisbee_interception frisbee.launch.py source:="$OUT/synthetic/throw.mp4" loop:=true \
-        config:="$OUT/synthetic/cfg_$mode.yaml" "$@" > "$OUT/launch_$mode.log" 2>&1 &
-    local pid=$!
-    local tfpid=""
+    local tfpid="" mockpid=""
     if [ "$mode" = metric ]; then
-        ros2 run tf2_ros static_transform_publisher --frame-id body_link --child-frame-id phone_camera_optical_frame \
+        # robot stand-in (robot_description, joint_states, controller_manager, trajectory actions) + camera TF
+        python3 src/frisbee_interception/ci/mock_robot.py "$FRISBEE_TEST_URDF" "$OUT/catch_pose/catch_pose.json" \
+            > "$OUT/mock_robot.log" 2>&1 &
+        mockpid=$!
+        ros2 run tf2_ros static_transform_publisher --x -0.55 --y 0.219 --z -0.348 --roll -1.5707963 --pitch 0 \
+            --yaw -1.5707963 --frame-id body_link --child-frame-id phone_camera_optical_frame \
             > "$OUT/tf_$mode.log" 2>&1 &
         tfpid=$!
     fi
+    ros2 launch frisbee_interception frisbee.launch.py source:="$OUT/synthetic/throw.mp4" loop:=true \
+        config:="$OUT/synthetic/cfg_$mode.yaml" "$@" > "$OUT/launch_$mode.log" 2>&1 &
+    local pid=$!
     python3 src/frisbee_interception/ci/ros_smoke_check.py --mode "$mode" --truth "$OUT/synthetic/throw_truth.json" \
-        --duration 20 --report "$OUT/smoke_$mode.json" || FAIL=1
-    kill -INT $pid $tfpid 2>/dev/null; sleep 3; kill -9 $pid $tfpid 2>/dev/null
-    pkill -f frisbee_interception/lib 2>/dev/null; pkill -f static_transform_publisher 2>/dev/null; sleep 1
-    tail -n 25 "$OUT/launch_$mode.log"
+        --truth-body "$OUT/synthetic/truth_body.json" --urdf "$FRISBEE_TEST_URDF" \
+        --duration 25 --report "$OUT/smoke_$mode.json" || FAIL=1
+    kill -INT $pid $tfpid $mockpid 2>/dev/null; sleep 3; kill -9 $pid $tfpid $mockpid 2>/dev/null
+    pkill -f frisbee_interception/lib 2>/dev/null; pkill -f static_transform_publisher 2>/dev/null
+    pkill -f mock_robot.py 2>/dev/null; sleep 1
+    tail -n 30 "$OUT/launch_$mode.log"
 }
 run_launch image
 run_launch metric
