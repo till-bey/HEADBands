@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="headbands-ros:jazzy"
+IMAGE="headbands-ros:humble"
 ROBOT_IP="192.168.100.3"
 
 if [[ "${1:-}" == "--build" ]]; then
@@ -47,12 +47,12 @@ echo "Cyclone DDS on ${IFACE}, ROS_DOMAIN_ID=15"
 exec docker run --rm \
   "${tty_args[@]}" \
   --network host \
-  --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp \
   -e ROS_DOMAIN_ID=15 \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e CYCLONEDDS_URI="${CYCLONEDDS_URI}" \
+  -e DISPLAY="${DISPLAY:-:0}" \
   -v "${ROOT}:/workspace" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -w /workspace \
   "${IMAGE}" \
   "$@"
