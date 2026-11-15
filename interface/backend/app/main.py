@@ -104,13 +104,17 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
                 # The page and its assets change with each deploy: browsers check the ETag on every load
                 # (a cheap 304 when unchanged) instead of guessing a cache lifetime and showing old files.
                 response = await call_next(request)
-                if request.url.path == "/" or request.url.path.startswith("/assets/"):
+                if request.url.path in ("/", "/navigation") or request.url.path.startswith("/assets/"):
                     response.headers["Cache-Control"] = "no-cache"
                 return response
 
             @app.get("/", include_in_schema=False)
             async def serve_index() -> FileResponse:
                 return FileResponse(str(frontend_dir / "index.html"))
+
+            @app.get("/navigation", include_in_schema=False)
+            async def serve_navigation() -> FileResponse:
+                return FileResponse(str(frontend_dir / "navigation.html"))
 
     return app
 

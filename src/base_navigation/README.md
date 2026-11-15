@@ -165,6 +165,17 @@ the camera. Missing detections, invalid projections, and expired results show
 unavailable measurements. While waiting for frames, the previous camera image
 remains visible with its detection marker and measurements cleared.
 
+## From the Web UI (robot bridge)
+
+The robot bridge (`docker/run.sh docker/bridge.sh`) also runs this dashboard, on loopback inside the
+bridge, with the same `settings.json`. The Web UI's **Frisbee navigation** page (Full view, or `/navigation`)
+shows it through the cloud: `interface/frontend/navigation.html` is a copy of `dashboard.html` whose requests
+go to `/api/v1/robotics/navigation/...` and are forwarded to the bridge
+(`interface/robot_bridge/.../navigation_mode.py`). Keep the two pages in sync.
+There, base velocity goes through the bridge's safety supervisor like a manual jog (speed limits, E-Stop,
+cloud watchdog and front LiDAR stop apply); lift, head and ultrasound use `navigation.py` as below,
+with its head convention. The standalone dashboard keeps working; do not run both against the same robot.
+
 ## Run ROS navigation from the browser
 
 Start the website in the same ROS-enabled environment used for navigation:

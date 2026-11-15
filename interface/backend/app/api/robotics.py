@@ -11,6 +11,8 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -296,6 +298,56 @@ async def manual_control(
     return {"sent": True}
 
 
+NAVIGATION_PATHS = {
+    "GET": {"settings", "settings/saved", "robot/status", "frame.jpg"},
+    "POST": {
+        "settings", "settings/save", "settings/reload", "disconnect",
+        "robot/connect", "robot/start", "robot/stop", "robot/disconnect", "robot/heartbeat", "robot/avoidance",
+        "robot/lift/up", "robot/lift/down", "robot/head/up", "robot/head/down",
+    },
+}
+
+
+@router.api_route(
+    "/api/v1/robotics/navigation/{path:path}", methods=["GET", "POST"], dependencies=[Depends(require_api_auth)]
+)
+async def navigation_proxy(
+    path: str,
+    request: Request,
+    container: Annotated[ServiceContainer, Depends(get_container)],
+) -> Response:
+    """Navigation page: forwards the frisbee navigation dashboard's own requests to it on the robot bridge."""
+    if not container.settings.robotics_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Robotics integration is disabled.")
+    if path not in NAVIGATION_PATHS[request.method]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown navigation request.")
+    body = await request.body() if request.method == "POST" else b""
+    if len(body) > 8192:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Request too large.")
+    try:
+        text = body.decode() if body else None
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request must be UTF-8 JSON.") from exc
+    reply = await container.robot_gateway.navigation_request(request.method, "/" + path, text)
+    if reply is None:
+        return Response(
+            content='{"error": "The robot bridge is not connected or did not answer."}',
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            media_type="application/json",
+        )
+    try:
+        content = base64.b64decode(str(reply.get("body_b64", "")), validate=True)
+        code = int(reply.get("status", 502))
+        if not 200 <= code < 600:
+            raise ValueError(code)
+    except (ValueError, TypeError):
+        code, content = status.HTTP_502_BAD_GATEWAY, b'{"error": "Malformed reply from the robot bridge."}'
+    media = str(reply.get("content_type") or "application/json")
+    if media not in {"application/json", "image/jpeg", "text/html"}:
+        media = "application/octet-stream"
+    return Response(content=content, status_code=code, media_type=media, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/api/v1/robotics/estop", dependencies=[Depends(require_api_auth)])
 async def trigger_estop(
     body: EStopRequest,
@@ -336,6 +388,8 @@ async def robot_bridge_websocket(websocket: WebSocket) -> None:
                 )
             elif msg_type == "camera_frame":
                 container.robot_gateway.ingest_camera_frame(msg)
+            elif msg_type == "navigation_http_response":
+                container.robot_gateway.ingest_navigation_response(msg)
             elif msg_type == "camera_frame_error":
                 container.robot_gateway.ingest_camera_error(msg)
             elif msg_type == "joint_states":

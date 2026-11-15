@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -17,6 +18,7 @@ import websockets
 
 from swiss_robot_bridge.camera_manager import PantherCameraManager
 from swiss_robot_bridge.controllers import ControllerSwitcher, StepStream, TimedStream
+from swiss_robot_bridge.navigation_mode import start_navigation
 from swiss_robot_bridge.local_safety import (
     LocalSafetyRejectedError,
     LocalSafetySupervisor,
@@ -717,6 +719,7 @@ async def run_bridge_loop() -> None:
         startup_timeout_seconds=float(os.getenv("PANTHER_CAMERA_STARTUP_TIMEOUT_SECONDS", "4.5")),
     )
     ros_hw = ROS2HardwareAdapter(supervisor=supervisor, camera_manager=camera_mgr)
+    navigation = start_navigation()
 
     headers: dict[str, str] = {}
     if shared_token:
@@ -728,6 +731,12 @@ async def run_bridge_loop() -> None:
             ros_hw.spin_once()
             now_mono = time.monotonic()
             ros_hw.tick_streams(now_mono)  # head set-points and timed gripper commands
+            nav_twist = navigation and navigation.take_twist(
+                now_mono, supervisor.max_linear_speed_mps, supervisor.max_angular_speed_rps
+            )
+            if nav_twist is not None:  # frisbee navigation drives as a manual jog, so the watchdog below applies
+                if supervisor.drive_manual(nav_twist, now_mono).is_nonzero():
+                    ros_hw.ensure_ultrasonics_enabled()
             safe_twist = supervisor.evaluate_watchdog(now_mono)
             promoted = supervisor.pop_promoted_plan()
             if promoted is not None:
@@ -834,6 +843,23 @@ async def run_bridge_loop() -> None:
                                 sent_seq = seq
                             await asyncio.sleep(0.2)
 
+                    async def _navigation_http(request: dict[str, Any]) -> None:
+                        reply = (
+                            await asyncio.to_thread(
+                                navigation.forward,
+                                str(request.get("method", "")),
+                                str(request.get("path", "")),
+                                request.get("body"),
+                            )
+                            if navigation is not None
+                            else {"status": 503, "content_type": "application/json", "body_b64": base64.b64encode(
+                                b'{"error": "Frisbee navigation is not available on the robot bridge (see its log)."}'
+                            ).decode()}
+                        )
+                        await ws.send(json.dumps(
+                            {"type": "navigation_http_response", "request_id": request.get("request_id"), **reply}
+                        ))
+
                     sender_task = asyncio.create_task(_telemetry_sender())
                     joint_task = asyncio.create_task(_joint_state_sender())
                     try:
@@ -844,6 +870,8 @@ async def run_bridge_loop() -> None:
 
                             if msg_type == "emergency_stop":
                                 supervisor.trigger_local_estop()
+                                if navigation is not None:
+                                    navigation.stop("E-Stop; navigation stopped")
                                 ros_hw.publish_preempt_stop()
                                 logger.warning("E-STOP latched from cloud gateway!")
 
@@ -861,6 +889,9 @@ async def run_bridge_loop() -> None:
                                     ros_hw.apply_manual(manual)
                                 except LocalSafetyRejectedError as exc:
                                     logger.error("Local safety gate rejected manual command: %s", exc)
+
+                            elif msg_type == "navigation_http":
+                                asyncio.create_task(_navigation_http(data))
 
                             elif msg_type == "capture_camera":
                                 req_id = str(data.get("request_id") or f"cam-{int(time.time() * 1000)}")
@@ -904,12 +935,16 @@ async def run_bridge_loop() -> None:
                         sender_task.cancel()
                         joint_task.cancel()
             except Exception as exc:  # noqa: BLE001
+                if navigation is not None:
+                    navigation.stop("Cloud connection lost; navigation stopped")
                 ros_hw.publish_preempt_stop()
                 logger.warning("Cloud connection unavailable (%s); Panther safely halted locally", exc)
                 await asyncio.sleep(3.0)
     finally:
         watchdog_task.cancel()
         camera_mgr.stop_driver()
+        if navigation is not None:
+            navigation.close()
 
 
 def main() -> None:

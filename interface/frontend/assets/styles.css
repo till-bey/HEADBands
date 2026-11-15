@@ -1040,6 +1040,7 @@ input[type="checkbox"] {
 body:not(.mode-full) .topbar .subtitle,
 body:not(.mode-full) #wsBadge,
 body:not(.mode-full) #manualToggle,
+body:not(.mode-full) #navigationLink,
 body:not(.mode-full) .conversation-panel > :not(.mic-bar),
 body:not(.mode-full) .mic-bar > :not(#micToggleBtn),
 body:not(.mode-full) .robotics-panel > :not(.simple-confirm),

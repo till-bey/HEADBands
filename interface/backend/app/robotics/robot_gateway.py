@@ -54,6 +54,7 @@ class RobotSafetyGateway:
         self._latest_camera_frame: CameraFrameSnapshot | None = None
         self._latest_camera_monotonic: float | None = None
         self._pending_camera_futures: dict[str, asyncio.Future[CameraFrameSnapshot | None]] = {}
+        self._pending_navigation_futures: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
         self._latest_joint_states: JointStatesSnapshot | None = None
         self._latest_joint_monotonic: float | None = None
 
@@ -115,6 +116,10 @@ class RobotSafetyGateway:
                 if not fut.done():
                     fut.set_result(None)
             self._pending_camera_futures.clear()
+            for nav in self._pending_navigation_futures.values():
+                if not nav.done():
+                    nav.set_result(None)
+            self._pending_navigation_futures.clear()
             logger.warning("ROS 2 bridge disconnected")
 
     async def ingest_telemetry(self, telemetry: RobotTelemetryEvent) -> RobotStatus:
@@ -250,6 +255,31 @@ class RobotSafetyGateway:
             # Cloud Run may run several instances; the bridge is connected to only one of them.
             raise SafetyValidationError("The robot bridge is not connected to this server instance.")
         await self._bridge_ws.send_json({"type": "manual", "command": req.model_dump(mode="json")})
+
+    async def navigation_request(self, method: str, path: str, body: str | None) -> dict[str, Any] | None:
+        """Forward one Navigation page request to the frisbee navigation dashboard on the bridge.
+
+        Returns the bridge's reply ({status, content_type, body_b64}), or None when the bridge is absent or silent."""
+        if self._bridge_ws is None:
+            return None
+        req_id = f"nav-{uuid4().hex[:12]}"
+        fut: asyncio.Future[dict[str, Any] | None] = asyncio.get_running_loop().create_future()
+        self._pending_navigation_futures[req_id] = fut
+        try:
+            await self._bridge_ws.send_json(
+                {"type": "navigation_http", "request_id": req_id, "method": method, "path": path, "body": body}
+            )
+            return await asyncio.wait_for(fut, timeout=5.0)
+        except (TimeoutError, RuntimeError) as exc:  # RuntimeError: the bridge socket closed while sending
+            logger.warning("Navigation request failed", extra={"path": path, "error": repr(exc)})
+            return None
+        finally:
+            self._pending_navigation_futures.pop(req_id, None)
+
+    def ingest_navigation_response(self, raw_payload: dict[str, Any]) -> None:
+        fut = self._pending_navigation_futures.pop(str(raw_payload.get("request_id") or ""), None)
+        if fut is not None and not fut.done():
+            fut.set_result(raw_payload)
 
     async def plan_gesture(self, description: str) -> GestureTrajectory:
         """Plan a language-described gesture from the robot's current pose; raise if it is refused."""
