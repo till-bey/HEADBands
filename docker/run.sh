@@ -21,7 +21,9 @@ if [[ ${BUILD} -eq 1 ]] || ! docker image inspect "${IMAGE}" >/dev/null 2>&1; th
 fi
 
 if [[ ${SIM} -eq 1 ]]; then
-  ros_env=(-e ROS_DOMAIN_ID=77 -e ROS_LOCALHOST_ONLY=1)
+  # Same as SIM_CYCLONE in mock_sim.launch.py: loopback only, multicast forced on.
+  ros_env=(-e ROS_DOMAIN_ID=77
+           -e CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/></Interfaces></General></Domain></CycloneDDS>')
   echo "Sim mode: ROS_DOMAIN_ID=77, localhost only"
 else
   IFACE="${ROS_IFACE:-$(ip -o route get "${ROBOT_IP}" | awk '{print $3; exit}')}"

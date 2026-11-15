@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from panther_examples import robot as r
@@ -29,6 +29,9 @@ HARDWARE = {r.LEFT_HARDWARE: r.LEFT_ARM, r.RIGHT_HARDWARE: r.RIGHT_ARM, r.LEFT_G
 # the vendor publishes no limit (PR #521 moves the arms at 0.35 rad/s average).
 SIM_ARM_VEL = "0.5"
 SIM_DOMAIN = "77"
+# Loopback only, multicast forced on (lo has none by default). ROS_LOCALHOST_ONLY=1 instead caps Cyclone at a few
+# participants on Humble, and the sim has about ten. Same string as docker/run.sh --sim.
+SIM_CYCLONE = '<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/></Interfaces></General></Domain></CycloneDDS>'
 VENDOR_MESHES ="file:///opt/ros/humble/share/mh3_description"
 
 
@@ -119,7 +122,8 @@ def nodes(context):
     return [
         Node(package="robot_state_publisher", executable="robot_state_publisher", parameters=[desc]),
         Node(package="controller_manager", executable="ros2_control_node",
-             parameters=[os.path.join(SHARE, "config", "controllers.yaml")], output="screen"),
+             parameters=[os.path.join(SHARE, "config", "controllers.yaml")], output="screen",
+             remappings=[("~/robot_description", "/robot_description")]),  # Humble listens on its own topic
         # As on the robot: the forward controller owns both arms; the per-arm trajectory controllers
         # are loaded inactive and switched in for a move (cartesian_follow.py, PR #521 driver).
         spawn("joint_state_broadcaster", r.FORWARD, r.HEAD_FORWARD,
@@ -139,8 +143,7 @@ def generate_launch_description():
         # Never join the robot's graph, whatever the terminal has: the sim uses the robot's
         # controller names, so on the robot's domain rqt could command the real arms.
         SetEnvironmentVariable("ROS_DOMAIN_ID", SIM_DOMAIN),
-        SetEnvironmentVariable("ROS_LOCALHOST_ONLY", "1"),  # Humble; Iron+ would use ROS_AUTOMATIC_DISCOVERY_RANGE
-        UnsetEnvironmentVariable("CYCLONEDDS_URI"),  # robot setups pin it to the robot's NIC
+        SetEnvironmentVariable("CYCLONEDDS_URI", SIM_CYCLONE),  # replaces a robot setup's NIC pinning
         DeclareLaunchArgument("urdf", default_value=os.path.join(SHARE, "urdf", "panther.urdf")),
         DeclareLaunchArgument("meshes", default_value=""),
         OpaqueFunction(function=nodes),

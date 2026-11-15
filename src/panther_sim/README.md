@@ -3,7 +3,7 @@
 Arms, head, lift and grippers on `ros2_control` mock hardware (`mock_components/GenericSystem`): commanded position = reported position, no physics, no driving base. Use it to try trajectories before the real robot.
 
 ```bash
-docker/run.sh --sim                       # from the repo root; domain 77, localhost only
+docker/run.sh --sim                       # from the repo root; domain 77, loopback only
 colcon build && source install/setup.bash
 ros2 launch panther_sim mock_sim.launch.py
 ```
@@ -28,16 +28,15 @@ The launch file forces these for its own nodes, whatever your terminal has:
 | Variable | Sim value | Why |
 | --- | --- | --- |
 | `ROS_DOMAIN_ID` | `77` | The sim uses the robot's controller names. On the robot's domain, rqt could command the real arms. |
-| `ROS_LOCALHOST_ONLY` | `1` | Stays on this machine. |
-| `CYCLONEDDS_URI` | unset | Robot setups pin it to the robot's USB-Ethernet NIC. With the cable out, Cyclone cannot discover anything. |
+| `CYCLONEDDS_URI` | loopback `lo`, multicast forced on | Stays on this machine, and replaces a robot setup's NIC pinning. Humble's `ROS_LOCALHOST_ONLY=1` is not used: with Cyclone it allows only a few participants, and the sim has about ten (`Failed to find a free participant index`). |
 | `RMW_IMPLEMENTATION` | `rmw_cyclonedds_cpp` | `rqt_joint_trajectory_controller` can miss the controller manager under Fast DDS. The robot runs Cyclone too. |
 
 `docker/run.sh --sim` sets the same for every command in that container. Outside Docker, use a Humble terminal with:
 
 ```bash
 source /opt/ros/humble/setup.bash && source install/setup.bash
-unset CYCLONEDDS_URI
-export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_DOMAIN_ID=77 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/></Interfaces></General></Domain></CycloneDDS>'
 ros2 daemon stop    # drop a daemon cached with the robot settings
 ```
 
