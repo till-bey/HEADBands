@@ -29,6 +29,8 @@ from swiss_robot_bridge.local_safety import (
 )
 from swiss_robot_bridge.panther_topics import (
     GRIPPER_DEFAULT_VEL,
+    GRIPPER_EFFORT,
+    PICKUP_GRIPPER_VEL,
     HEAD_JOINTS,
     HEAD_MAX_VEL_RPS,
     LIFT_MAX_VEL_MPS,
@@ -93,6 +95,7 @@ class ROS2HardwareAdapter:
         self._switcher: ControllerSwitcher | None = None
         self._head_stream = TimedStream()  # head_forward_position_controller set-points over time
         self._gripper_stream = StepStream()  # gripper commands at their times
+        self._stream_gripper_vel = 1.0  # their velocity: throw release fast, pickup as pickup.py
         self._head_pub: Any = None
         self._lift_pub: Any = None
         self._left_gripper_pub: Any = None
@@ -523,6 +526,7 @@ class ROS2HardwareAdapter:
             msg.command.name = [""]
             msg.command.position = [float(position)]
             msg.command.velocity = [float(velocity)]
+            msg.command.effort = [GRIPPER_EFFORT]  # as every panther_examples script; without it the grip was weak
             pub.publish(msg)
 
     def publish_master_trajectory(self, plan: PantherActuationPlan) -> None:
@@ -582,6 +586,7 @@ class ROS2HardwareAdapter:
                     events.append((now + t_s, g, vals[g]))
                     last = vals[g]
         self._gripper_stream.events = sorted(events)
+        self._stream_gripper_vel = PICKUP_GRIPPER_VEL if plan.action == "pick_object" else 1.0
 
     def tick_streams(self, now: float | None = None) -> None:
         """Called every 0.05 s: next head set-point and any gripper command that is due."""
@@ -596,7 +601,7 @@ class ROS2HardwareAdapter:
             if joint == "body_joint":
                 self.publish_lift(value, LIFT_MAX_VEL_MPS)
             else:
-                self.publish_gripper("left" if joint == "joint_lf" else "right", value, 1.0)
+                self.publish_gripper("left" if joint == "joint_lf" else "right", value, self._stream_gripper_vel)
 
     def apply_manual(self, cmd: ManualCommand) -> None:
         """Joint targets from the manual panel (already checked by LocalSafetySupervisor.check_manual).
@@ -645,7 +650,7 @@ class ROS2HardwareAdapter:
 
         lift_wait = 0.0
         if plan.lift_position_m is not None:
-            if plan.action == "throw_object":  # lift first: unknown height counts as the bottom, the longest wait
+            if plan.master_trajectory_joints:  # lift first (throw, pickup): unknown height counts as the bottom
                 lift_wait = abs(plan.lift_position_m - (self.lift_height_m or 0.0)) / plan.lift_velocity_mps
             self.publish_lift(plan.lift_position_m, plan.lift_velocity_mps)
 

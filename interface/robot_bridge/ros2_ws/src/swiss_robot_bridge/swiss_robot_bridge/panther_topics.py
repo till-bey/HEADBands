@@ -97,6 +97,7 @@ LIFT_MAX_VEL_MPS = 0.05  # LIFT_VEL = 0.05 m/s in panther_examples/robot.py
 GRIPPER_MODE_PARALLEL = "parallel"
 GRIPPER_OPEN_POS = 0.0
 GRIPPER_CLOSED_POS = 1.0
+GRIPPER_EFFORT = 0.5  # command.effort, as panther_examples (pickup.py, teach.py, commands.py)
 GRIPPER_DEFAULT_VEL = 0.5  # GRIPPER_VEL = 0.5 strokes/s in master_controller.py & joint_check.py
 RIGHT_GRIPPER_MAX = 1.0  # panther_examples/robot.py: master_gui closes the right gripper no further
 
@@ -148,9 +149,13 @@ THROW_LEFT_ARM: tuple[float, ...] = (-0.05, 0.11, 1.42, -0.03, -1.39, -0.18, 0.0
 PICKUP_DIR = Path(__file__).resolve().parents[6] / "motion" / "pickup" / "key_points"
 PICKUP_PHASE_S = 8.0  # per key pose, at least (slower if a joint would pass 0.9 x MAX_ARM_JOINT_VEL_RPS)
 PICKUP_PAUSE_S = 1.0  # held between key poses
-PICKUP_LIFT_M = 0.19  # lift height for the whole pickup
-PICKUP_SCRAPE_GRIP = 0.5  # right gripper after the scrape (pose 3); closed when the move away (pose 4) starts
-PICKUP_CLOSE_S = 0.5  # that close ramps over this long, ending as the move away starts (<= PICKUP_PAUSE_S)
+# As the working `pickup scrape_sequence --body-height 0.6 --lower-body-height 0.2 --scrape-grip 0.5
+# --gripper-close-seconds 0.5 --time-scale 2.0 --between-delay 1.0` (fa21e94):
+PICKUP_START_LIFT_M = 0.6  # lift for pose 1; the arms wait until it is there
+PICKUP_LIFT_M = 0.2  # lift once pose 1 is reached, for the rest
+PICKUP_SCRAPE_GRIP = 0.5  # right gripper after the scrape (pose 3)
+PICKUP_CLOSE_S = 0.5  # then closed in a ramp over this long, once the move away (pose 4) is reached
+PICKUP_GRIPPER_VEL = 0.5  # gripper velocity for the pickup's commands, as pickup.py
 
 PANTHER_COMMAND_TOPICS: tuple[str, ...] = (
     TOPIC_CMD_VEL,

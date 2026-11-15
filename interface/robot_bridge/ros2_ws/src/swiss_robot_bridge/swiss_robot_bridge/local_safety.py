@@ -40,6 +40,7 @@ from swiss_robot_bridge.panther_topics import (
     PICKUP_PHASE_S,
     PICKUP_SCRAPE_GRIP,
     PICKUP_LIFT_M,
+    PICKUP_START_LIFT_M,
     THROW_DIR,
     THROW_FILES,
     THROW_LEFT_ARM,
@@ -200,27 +201,24 @@ PICKUP_JOINTS = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS + ("joint_lf", "joint_rf", "b
 
 
 def pickup_points() -> list[tuple[float, tuple[float, ...], float | None]]:
-    """The disk pickup on PICKUP_JOINTS: each key pose reached, then held PICKUP_PAUSE_S. Grippers open once pose 1
-    is reached, right gripper to PICKUP_SCRAPE_GRIP at pose 3 and closed as pose 4 starts. The lift stays at
-    PICKUP_LIFT_M (also sent with the plan, before the first point)."""
-    # (joint_lf, joint_rf, body_joint) on reaching each pose, and on the hold before it
-    lift = PICKUP_LIFT_M
-    reach = [(0.0, 0.0, lift), (0.0, 0.0, lift), (0.0, PICKUP_SCRAPE_GRIP, lift), (0.0, GRIPPER_CLOSED_POS, lift)]
-    hold = [None, reach[0], reach[1], reach[3]]  # the gripper closes as the move away starts, not at its end
+    """The disk pickup on PICKUP_JOINTS, as the working `pickup scrape_sequence`: each key pose reached, then held
+    PICKUP_PAUSE_S. Grippers open and the lift lowered to PICKUP_LIFT_M once pose 1 is reached (the plan sends the
+    lift to PICKUP_START_LIFT_M first), right gripper to PICKUP_SCRAPE_GRIP at pose 3, then closed in a
+    PICKUP_CLOSE_S ramp (0.05 s steps) once pose 4 is reached."""
+    rf = [0.0, 0.0, PICKUP_SCRAPE_GRIP, PICKUP_SCRAPE_GRIP]  # right gripper on reaching each pose
     pts: list[tuple[float, tuple[float, ...], float | None]] = []
     t = PICKUP_PHASE_S  # the first move is timed from the arm's actual pose by retime_from_current_pose
     for i, q in enumerate(PICKUP_POSES):
         if i:
             prev = PICKUP_POSES[i - 1]
-            if i == 3:  # ramp the close (0.1 s steps) while pose 3 holds, so it is gentle
-                n = max(1, round(PICKUP_CLOSE_S / 0.1))
-                for k in range(1, n):
-                    g = PICKUP_SCRAPE_GRIP + (GRIPPER_CLOSED_POS - PICKUP_SCRAPE_GRIP) * k / n
-                    pts.append((round(t + PICKUP_PAUSE_S - PICKUP_CLOSE_S * (n - k) / n, 4), prev + (0.0, g, lift), None))
             t += PICKUP_PAUSE_S
-            pts.append((round(t, 4), prev + hold[i], None))
+            pts.append((round(t, 4), prev + (0.0, rf[i - 1], PICKUP_LIFT_M), None))
             t += max(PICKUP_PHASE_S, max(abs(a - b) for a, b in zip(q, prev)) / (MAX_ARM_JOINT_VEL_RPS * 0.9))
-        pts.append((round(t, 4), q + reach[i], None))
+        pts.append((round(t, 4), q + (0.0, rf[i], PICKUP_LIFT_M), None))
+    n = max(1, round(PICKUP_CLOSE_S / 0.05))
+    for k in range(1, n + 1):  # the close, the arms holding pose 4
+        g = PICKUP_SCRAPE_GRIP + (GRIPPER_CLOSED_POS - PICKUP_SCRAPE_GRIP) * k / n
+        pts.append((round(t + PICKUP_CLOSE_S * k / n, 4), PICKUP_POSES[3] + (0.0, g, PICKUP_LIFT_M), None))
     return pts
 
 
@@ -763,7 +761,7 @@ class LocalSafetySupervisor:
             plan.trigger_camera = True
 
         elif cmd.action == "pick_object" and (cmd.object_label or "").strip().lower() == "disk":
-            plan.lift_position_m = PICKUP_LIFT_M
+            plan.lift_position_m = PICKUP_START_LIFT_M
             plan.master_trajectory_joints = PICKUP_JOINTS
             plan.master_trajectory_points = pickup_points()
             plan.trajectory_duration_seconds = plan.master_trajectory_points[-1][0]

@@ -44,9 +44,9 @@ def test_bridge_plays_the_key_poses_safely() -> None:
         },
         now_utc=now,
     )
-    assert plan.master_trajectory_joints == PICKUP_JOINTS and plan.lift_position_m == pytest.approx(0.19)
+    assert plan.master_trajectory_joints == PICKUP_JOINTS and plan.lift_position_m == pytest.approx(0.6)
     pts = plan.master_trajectory_points
-    assert len(pts) == 11  # 4 poses + 3 holds + 4 steps of the gripper close ramp
+    assert len(pts) == 17  # 4 poses + 3 holds + 10 steps of the gripper close ramp
     arms = [n for n in PICKUP_JOINTS if n in ARM_JOINT_LIMITS]
     for (t0, q0, _), (t1, q1, _) in zip(pts, pts[1:]):
         assert t1 > t0
@@ -54,8 +54,9 @@ def test_bridge_plays_the_key_poses_safely() -> None:
     for _, q, _ in pts:
         assert all(ARM_JOINT_LIMITS[n][0] <= v <= ARM_JOINT_LIMITS[n][1] for n, v in zip(arms, q))
     rf = [dict(zip(PICKUP_JOINTS, q))["joint_rf"] for _, q, _ in pts]
-    assert rf == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.0])  # ramps closed before the move away
-    assert pts[-2][0] - pts[5][0] == pytest.approx(0.4)  # 0.6 at -0.4 s ... 1.0 when the move away starts
+    assert rf[:7] == [0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5] and rf[-1] == 1.0  # closes after pose 4, as pickup.py
+    assert pts[-1][0] - pts[6][0] == pytest.approx(0.5)  # in a 0.5 s ramp
+    assert {dict(zip(PICKUP_JOINTS, q))["body_joint"] for _, q, _ in pts} == {0.2}  # lowered once pose 1 is reached
     assert plan.trajectory_duration_seconds == pts[-1][0]
 
 
