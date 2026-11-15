@@ -1,4 +1,4 @@
-"""White ground-disc candidates using RGB thresholding and fitted ellipses.
+"""White discs detected across the full image with contour ellipses.
 
 This is a classical computer-vision heuristic, not a trained object classifier.
 All coordinates refer to the input BGR image.
@@ -14,14 +14,14 @@ import numpy as np
 
 @dataclass(frozen=True)
 class DetectorSettings:
-    ground_start_pct: int = 25  # ignore the top of the image
-    rgb_sum_min: int = 435  # R + G + B, range 0-765
-    channel_difference_max: int = 30  # max(R,G,B) - min(R,G,B), range 0-255
-    min_radius: int = 12
-    max_radius: int = 120
-    min_ellipse_ratio: float = 0.28
+    rgb_sum_min: int = 160  # R + G + B, range 0-765
+    channel_difference_max: int = 55  # max(R,G,B) - min(R,G,B), range 0-255
+    min_radius: int = 10
+    max_radius: int = 200
+    min_ellipse_ratio: float = 0.65
     min_area: int = 150
     min_white_fraction: float = 0.48
+    processing_width: int = 640  # landscape width; portrait swaps width/height
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,8 @@ class Candidate:
         return (cx - rad, cy - rad, cx + rad, cy + rad)
 
 
-def prepare_frame(frame: np.ndarray) -> np.ndarray:
-    """Fit into 640x480 (landscape) or 480x640 (portrait), without distortion.
+def prepare_frame(frame: np.ndarray, processing_width: int = 640) -> np.ndarray:
+    """Fit into processing_width × 3/4 width, swapping axes for portrait.
 
     Black letterboxing preserves the aspect ratio for sources that are not 4:3.
     Candidate coordinates and pixel-based settings refer to this prepared frame.
@@ -49,7 +49,10 @@ def prepare_frame(frame: np.ndarray) -> np.ndarray:
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3 or not frame.size:
         raise ValueError("Expected a non-empty OpenCV BGR image with three channels")
     height, width = frame.shape[:2]
-    target_width, target_height = (640, 480) if width >= height else (480, 640)
+    if not isinstance(processing_width, int) or processing_width < 4 or processing_width % 4:
+        raise ValueError("processing_width must be a positive multiple of 4")
+    short_side = processing_width * 3 // 4
+    target_width, target_height = (processing_width, short_side) if width >= height else (short_side, processing_width)
     if (width, height) == (target_width, target_height):
         return frame
     scale = min(target_width / width, target_height / height)
@@ -65,10 +68,6 @@ def prepare_frame(frame: np.ndarray) -> np.ndarray:
         resized, top, target_height - resized_height - top,
         left, target_width - resized_width - left, cv2.BORDER_CONSTANT, value=(0, 0, 0),
     )
-
-
-def _inside_roi(y: int, shape: tuple[int, ...], cfg: DetectorSettings) -> bool:
-    return y >= int(shape[0] * cfg.ground_start_pct / 100)
 
 
 def _disk_mask(shape: tuple[int, ...], center: tuple[int, int], axes: tuple[int, int], angle: float) -> np.ndarray:
@@ -91,17 +90,15 @@ def preprocess(frame: np.ndarray, cfg: DetectorSettings) -> tuple[np.ndarray, np
 
     # Sum/spread are invariant to BGR channel order. Promote before summing
     # so bright pixels (up to 765) cannot overflow an 8-bit value.
-    channels = frame.astype(np.uint16)
-    brightness = channels.sum(axis=2)
-    difference = channels.max(axis=2) - channels.min(axis=2)
-    threshold_mask = (
-        (brightness >= cfg.rgb_sum_min) & (difference <= cfg.channel_difference_max)
-    ).astype(np.uint8) * 255
-    cutoff = int(frame.shape[0] * cfg.ground_start_pct / 100)
-    threshold_mask[:cutoff] = 0
+    b, g, r = cv2.split(frame)
+    brightness = cv2.add(cv2.add(b, g, dtype=cv2.CV_16U), r, dtype=cv2.CV_16U)
+    difference = cv2.subtract(cv2.max(cv2.max(b, g), r), cv2.min(cv2.min(b, g), r))
+    threshold_mask = cv2.bitwise_and(
+        cv2.inRange(brightness, cfg.rgb_sum_min, 765),
+        cv2.inRange(difference, 0, cfg.channel_difference_max),
+    )
     mask = cv2.morphologyEx(threshold_mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    mask[:cutoff] = 0
     return threshold_mask, mask
 
 
@@ -138,11 +135,15 @@ def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettin
             continue
         center = (int(round(cx)), int(round(cy)))
         axes = (max(1, int(round(width / 2))), max(1, int(round(height / 2))))
-        if not _inside_roi(center[1], frame.shape, cfg):
-            continue
-
-        filled_ellipse = _disk_mask(frame.shape, center, axes, angle)
-        whiteness = _fraction_white(white_mask, filled_ellipse)
+        # Validate only the candidate's bounding patch, rather than allocating
+        # and scanning several full-frame masks per contour.
+        reach = int(np.ceil(max(axes) * 1.25)) + 2
+        x0, y0 = max(0, center[0] - reach), max(0, center[1] - reach)
+        x1, y1 = min(frame.shape[1], center[0] + reach + 1), min(frame.shape[0], center[1] + reach + 1)
+        patch = white_mask[y0:y1, x0:x1]
+        local_center = (center[0] - x0, center[1] - y0)
+        filled_ellipse = _disk_mask(patch.shape, local_center, axes, angle)
+        whiteness = _fraction_white(patch, filled_ellipse)
         if whiteness < cfg.min_white_fraction:
             continue
 
@@ -150,9 +151,9 @@ def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettin
         shape_fill = min(1.0, area / ellipse_area)
         if shape_fill < 0.58:
             continue
-        outer = _disk_mask(frame.shape, center, (int(axes[0] * 1.25), int(axes[1] * 1.25)), angle)
+        outer = _disk_mask(patch.shape, local_center, (int(axes[0] * 1.25), int(axes[1] * 1.25)), angle)
         ring = cv2.subtract(outer, filled_ellipse)
-        outside_white = _fraction_white(white_mask, ring)
+        outside_white = _fraction_white(patch, ring)
         if outside_white > 0.65:
             continue
 
@@ -184,20 +185,15 @@ def _suppress_overlapping_ellipses(candidates: list[Candidate]) -> list[Candidat
 
 
 def detect(frame: np.ndarray, cfg: DetectorSettings) -> tuple[list[Candidate], dict[str, np.ndarray]]:
-    """Threshold RGB, clean the mask, fit its contours, and return debug masks."""
+    """Find white discs using contour ellipses."""
     threshold_mask, mask = preprocess(frame, cfg)
     candidates = find_ellipses(frame, mask, cfg)
     return candidates[:20], {"threshold_mask": threshold_mask, "white_mask": mask}
 
 
 def draw_detections(frame: np.ndarray, candidates: list[Candidate], cfg: DetectorSettings) -> np.ndarray:
-    """Draw ROI and detections on a copy of the BGR input image."""
+    """Draw detections on a copy of the BGR input image."""
     result = frame.copy()
-    cutoff = int(frame.shape[0] * cfg.ground_start_pct / 100)
-    if cutoff > 0:
-        cv2.line(result, (0, cutoff), (frame.shape[1] - 1, cutoff), (255, 190, 40), 2)
-        cv2.putText(result, "Ground ROI below", (12, max(18, cutoff - 9)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 190, 40), 2, cv2.LINE_AA)
 
     for index, candidate in enumerate(candidates, start=1):
         color = (75, 225, 80)

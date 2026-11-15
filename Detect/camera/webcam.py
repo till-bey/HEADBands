@@ -1,8 +1,8 @@
-"""Run a ground-only detector on a live USB webcam or a local video file.
+"""Run a full-image frisbee detector on a USB webcam or a local video file.
 
 Examples:
-    python webcam.py --input 0
-    python webcam.py --input field.mp4 --output result.mp4
+    python -m camera.webcam --input 0
+    python -m camera.webcam --input field.mp4 --output result.mp4
 """
 
 import argparse
@@ -17,16 +17,22 @@ from detector import DetectorSettings, detect, draw_detections, prepare_frame
 def main() -> None:
     parser = argparse.ArgumentParser(description="Basic ground-frisbee webcam/video detector")
     parser.add_argument("--input", default="0", help="Camera index or local video path")
-    parser.add_argument("--ground-start", type=int, default=25, help="Ground ROI begins at this image-height percentage")
     parser.add_argument("--output", default="", help="Optional MP4 output file")
     parser.add_argument("--no-display", action="store_true", help="Process video without opening a window")
+    parser.add_argument("--resolution", type=int, choices=[320, 480, 640, 960, 1280], default=640,
+                        help="Processing landscape width (4:3); portrait swaps dimensions")
+    parser.add_argument("--min-radius", type=int, default=10, help="White radius minimum in processing pixels")
+    parser.add_argument("--max-radius", type=int, default=200, help="White radius maximum in processing pixels")
     args = parser.parse_args()
+    if args.min_radius < 1 or args.max_radius <= args.min_radius:
+        parser.error("Require 0 < min-radius < max-radius")
 
     src = int(args.input) if args.input.isdecimal() else args.input
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {args.input}")
-    cfg = DetectorSettings(ground_start_pct=args.ground_start)
+    cfg = DetectorSettings(processing_width=args.resolution,
+                           min_radius=args.min_radius, max_radius=args.max_radius)
     writer = None
     frame_count = 0
 
@@ -35,12 +41,12 @@ def main() -> None:
             ok, frame = cap.read()
             if not ok:
                 break
-            frame = prepare_frame(frame)
+            frame = prepare_frame(frame, cfg.processing_width)
             start = time.perf_counter()
             matches, _ = detect(frame, cfg)
             result = draw_detections(frame, matches, cfg)
             fps = 1.0 / max(1e-6, time.perf_counter() - start)
-            cv2.putText(result, f"Ellipse contours | {len(matches)} candidate(s) | {fps:.1f} proc FPS",
+            cv2.putText(result, f"White discs | {len(matches)} candidate(s) | {fps:.1f} proc FPS",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
             if args.output:
                 if writer is None:

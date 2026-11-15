@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Navigation dashboard</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #10151c; color: #e8edf3; font: 15px system-ui, sans-serif; }
+    header { padding: 24px 28px 12px; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    p { color: #a8b8c9; margin: 0; line-height: 1.5; }
+    main { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 20px; padding: 16px 28px 28px; }
+    form, .preview { background: #19222e; border: 1px solid #304053; border-radius: 12px; padding: 20px; }
+    label { display: block; color: #c0cede; font-size: 13px; margin: 14px 0 5px; }
+    input, select, button { width: 100%; border-radius: 6px; padding: 10px; font: inherit; }
+    input, select { background: #10151c; border: 1px solid #4b6077; color: #e8edf3; }
+    button { cursor: pointer; border: 0; background: #87dfbd; color: #102b23; font-weight: 650; margin-top: 18px; }
+    button.secondary { background: #304053; color: #e8edf3; margin-top: 8px; }
+    button:disabled { opacity: .6; cursor: wait; }
+    button:focus-visible { outline: 2px solid #87dfbd; outline-offset: 3px; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .settings-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-bottom: 18px; }
+    .settings-tabs button { background: #10151c; color: #a8b8c9; margin: 0; padding: 10px 4px; font-size: 12px; }
+    .settings-tabs button[aria-selected="true"] { background: #304d45; color: #b1f5d9; box-shadow: inset 0 -2px #87dfbd; }
+    .tab-panel[hidden] { display: none; }
+    .tab-panel { min-height: 270px; }
+    #message { margin-top: 14px; font-size: 13px; min-height: 40px; }
+    .preview { align-self: start; padding: 10px; }
+    .robot-controls { padding: 14px 14px 20px; margin-bottom: 10px; border-bottom: 1px solid #304053; }
+    .robot-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .robot-heading h2 { margin: 0; font-size: 18px; }
+    .robot-badge { border-radius: 999px; padding: 5px 10px; background: #304053; color: #c0cede; font-size: 12px; }
+    .robot-badge[data-state="running"] { background: #75422a; color: #ffe1bd; }
+    .robot-badge[data-state="connected"] { background: #304d45; color: #b1f5d9; }
+    .robot-speeds { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 12px; color: #c0cede; }
+    .robot-speeds strong { color: #e8edf3; font-variant-numeric: tabular-nums; }
+    .robot-controls button { margin-top: 12px; }
+    .robot-controls .secondary { margin-top: 12px; }
+    button.stop { background: #f28e88; color: #42130f; }
+    #robot-detail, #robot-message, #lift-detail { margin-top: 10px; font-size: 13px; }
+    #robot-message { min-height: 20px; color: #e8edf3; }
+    img { width: 100%; height: auto; display: block; }
+    .caption { padding: 12px; font-size: 13px; }
+    @media (max-width: 850px) { main { grid-template-columns: 1fr; padding: 12px; } header { padding: 20px 12px; } }
+  </style>
+</head>
+<body>
+<header><h1>Navigation dashboard</h1><p>Live camera and frisbee navigation. Use the controls below to run navigation or adjust body height.</p></header>
+<main>
+  <form id="settings" novalidate>
+    <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+      <button id="tab-camera" type="button" role="tab" aria-controls="panel-camera" aria-selected="true" tabindex="0">Camera</button>
+      <button id="tab-robot" type="button" role="tab" aria-controls="panel-robot" aria-selected="false" tabindex="-1">Robot</button>
+      <button id="tab-detector" type="button" role="tab" aria-controls="panel-detector" aria-selected="false" tabindex="-1">Detector</button>
+      <button id="tab-controller" type="button" role="tab" aria-controls="panel-controller" aria-selected="false" tabindex="-1">Controller</button>
+    </div>
+    <section id="panel-camera" class="tab-panel" role="tabpanel" aria-labelledby="tab-camera">
+      <label for="url">Camera URL</label>
+      <input id="url" name="url" type="url" list="camera-urls" placeholder="http://192.168.1.50:8080/stream.mjpg" required>
+      <datalist id="camera-urls"></datalist>
+      <label for="source">Camera format</label>
+      <select id="source"><option value="stream">MJPEG / RTSP stream</option><option value="snapshot">HTTP JPEG snapshot</option></select>
+      <div class="pair">
+        <div><label for="horizontal_fov">Horizontal FOV (°)</label><input id="horizontal_fov" name="horizontal_fov" type="number" min="0.01" max="179.99" step="any" required></div>
+        <div><label for="vertical_fov">Vertical FOV (°)</label><input id="vertical_fov" name="vertical_fov" type="number" min="0.01" max="179.99" step="any" required></div>
+      </div>
+      <label for="target_timeout">Result timeout (s)</label><input id="target_timeout" name="target_timeout" type="number" min="0.000001" step="any" required>
+    </section>
+    <section id="panel-robot" class="tab-panel" role="tabpanel" aria-labelledby="tab-robot" hidden>
+      <div class="pair">
+        <div><label for="robot_z">Robot lift (m)</label><input id="robot_z" name="robot_z" type="number" min="0" step="any" required></div>
+        <div><label for="tilt_rad">Downward tilt (rad)</label><input id="tilt_rad" name="tilt_rad" type="number" step="any" required></div>
+      </div>
+      <p class="caption">Camera height is 0.83 m + lift. Tilt is zero horizontal and positive downward.</p>
+      <label for="max_linear_speed">Max forward speed (m/s)</label><input id="max_linear_speed" name="max_linear_speed" type="number" min="0.000001" step="any" required>
+      <label for="max_angular_speed">Max turn speed (rad/s)</label><input id="max_angular_speed" name="max_angular_speed" type="number" min="0.000001" step="any" required>
+    </section>
+    <section id="panel-detector" class="tab-panel" role="tabpanel" aria-labelledby="tab-detector" hidden>
+      <label for="resolution">Processing width</label><select id="resolution" name="resolution"><option>320</option><option>480</option><option>640</option><option>960</option><option>1280</option></select>
+      <div class="pair">
+        <div><label for="rgb_sum_min">Minimum RGB sum</label><input id="rgb_sum_min" name="rgb_sum_min" type="number" min="0" max="765" step="1" required></div>
+        <div><label for="channel_difference_max">Maximum delta</label><input id="channel_difference_max" name="channel_difference_max" type="number" min="0" max="255" step="1" required></div>
+      </div>
+      <p class="caption">Higher sum requires brighter pixels. Higher delta allows more color variation.</p>
+    </section>
+    <section id="panel-controller" class="tab-panel" role="tabpanel" aria-labelledby="tab-controller" hidden>
+      <div id="controller-fields"></div>
+    </section>
+    <div class="settings-actions">
+      <button id="connect" type="submit" disabled>Connect / apply settings</button>
+      <div class="pair">
+        <button id="save" class="secondary" type="button" disabled>Save settings</button>
+        <button id="reload" class="secondary" type="button" disabled>Reload saved values</button>
+      </div>
+      <button id="disconnect" class="secondary" type="button" disabled>Disconnect camera</button>
+      <p class="caption">Save stores values from all tabs in JSON. Reload restores all tabs; use Connect / apply settings to apply them.</p>
+      <p id="message" role="status">Loading settings…</p>
+    </div>
+  </form>
+  <section class="preview" aria-label="Camera preview">
+    <section class="robot-controls" aria-label="ROS navigation controls">
+      <div class="robot-heading"><h2>ROS navigation</h2><span id="robot-connection" class="robot-badge" data-state="disconnected">Disconnected</span></div>
+      <p id="robot-detail" role="status">Connect ROS to enable robot commands. Camera preview works without ROS.</p>
+      <div class="robot-speeds" aria-label="Commanded robot velocities">
+        <span>Forward <strong id="robot-linear">0.000</strong> m/s</span>
+        <span>Turn <strong id="robot-angular">0.000</strong> rad/s</span>
+      </div>
+      <div class="pair">
+        <button id="robot-connect" class="secondary" type="button">Connect ROS</button>
+        <button id="robot-disconnect" class="secondary" type="button" disabled>Disconnect ROS</button>
+      </div>
+      <div class="pair">
+        <button id="robot-start" type="button" disabled>Run controller</button>
+        <button id="robot-stop" class="stop" type="button">Stop robot</button>
+      </div>
+      <div class="robot-speeds" aria-label="Measured body lift">
+        <span>Body lift <strong id="lift-position">—</strong> m</span>
+      </div>
+      <p id="lift-detail" role="status">Connect ROS to adjust body height.</p>
+      <div class="pair">
+        <button id="lift-up" class="secondary" type="button" disabled>Body Up · 1 cm</button>
+        <button id="lift-down" class="secondary" type="button" disabled>Body Down · 1 cm</button>
+      </div>
+      <p id="robot-message" role="status" aria-live="polite"></p>
+      <p class="caption">Run uses the applied camera and controller settings. Body buttons require fresh lift feedback and pause navigation. Stop robot stops the base and body lift.</p>
+    </section>
+    <img id="view" alt="Waiting for camera preview">
+    <p class="caption">Angle: zero forward, positive right. Height: 0.83 m + lift. Stop the server with Ctrl+C in the terminal.</p>
+  </section>
+</main>
+<script>
+const form = document.getElementById('settings');
+const message = document.getElementById('message');
+const buttons = [...form.querySelectorAll('.settings-actions button')];
+function setBusy(busy) { for (const button of buttons) button.disabled = busy; }
+const tabs = [...form.querySelectorAll('[role="tab"]')];
+function selectTab(tab, focus = false) {
+  for (const item of tabs) {
+    const selected = item === tab;
+    item.setAttribute('aria-selected', String(selected));
+    item.tabIndex = selected ? 0 : -1;
+    document.getElementById(item.getAttribute('aria-controls')).hidden = !selected;
+  }
+  if (focus) tab.focus();
+}
+for (const [index, tab] of tabs.entries()) {
+  tab.addEventListener('click', () => selectTab(tab));
+  tab.addEventListener('keydown', event => {
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    selectTab(tabs[next], true);
+  });
+}
+const controllerFields = {
+  angular_kp: ['Angular gain', 0.000001], linear_kp: ['Linear gain', 0.000001],
+  angle_tolerance: ['Angle tolerance (rad)', 0.000001], distance_tolerance: ['Distance tolerance (m)', 0.000001],
+  target_distance: ['Target distance (m)', 0],
+};
+for (const [name, [title, min]] of Object.entries(controllerFields)) {
+  const label = document.createElement('label'); label.htmlFor = name; label.textContent = title;
+  const input = document.createElement('input');
+  Object.assign(input, {id: name, name, type: 'number', step: 'any', min: String(min), required: true});
+  document.getElementById('controller-fields').append(label, input);
+}
+let cameraUrls = [];
+try { const saved = JSON.parse(localStorage.getItem('navigationCameraUrls') || '[]'); if (Array.isArray(saved)) cameraUrls = saved.filter(url => typeof url === 'string'); } catch (_) {}
+function showCameraUrls() {
+  document.getElementById('camera-urls').replaceChildren(...cameraUrls.map(url => {
+    const option = document.createElement('option'); option.value = url; return option;
+  }));
+}
+showCameraUrls();
+function fillForm(settings) {
+  for (const [name, value] of Object.entries(settings)) {
+    if (name !== 'snapshot' && form.elements.namedItem(name)) form.elements.namedItem(name).value = value;
+  }
+  document.getElementById('source').value = settings.snapshot ? 'snapshot' : 'stream';
+}
+function readForm({allowEmptyUrl = false} = {}) {
+  const url = form.elements.namedItem('url');
+  const wasRequired = url.required;
+  url.required = !allowEmptyUrl;
+  try {
+    // Reveal the first invalid field's tab before the browser tries to focus it.
+    const invalid = [...form.elements].find(field => field.willValidate && !field.validity.valid);
+    if (invalid) {
+      const panel = invalid.closest('[role="tabpanel"]');
+      if (panel) selectTab(document.getElementById(panel.getAttribute('aria-labelledby')));
+      invalid.reportValidity();
+      return null;
+    }
+    const values = Object.fromEntries(new FormData(form));
+    for (const name of Object.keys(values)) if (name !== 'url') values[name] = Number(values[name]);
+    values.snapshot = document.getElementById('source').value === 'snapshot';
+    return values;
+  } finally { url.required = wasRequired; }
+}
+fetch('/settings').then(async response => {
+  if (!response.ok) throw new Error('Settings request failed');
+  return response.json();
+}).then(settings => {
+  fillForm(settings);
+  message.textContent = 'Choose a camera and apply your calibration.';
+}).catch(error => { message.textContent = 'Could not load settings: ' + error.message; })
+  .finally(() => setBusy(false));
+async function post(path, values) {
+  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values)});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Request failed');
+  message.textContent = result.message;
+  return result;
+}
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  const values = readForm();
+  if (values === null) return;
+  setBusy(true);
+  try {
+    await post('/settings', values);
+    // Keep recent camera addresses available in this browser; omit credentialed URLs.
+    const url = new URL(values.url);
+    if (!url.username && !url.password && !url.search) {
+      cameraUrls = [values.url, ...cameraUrls.filter(url => url !== values.url)].slice(0, 8);
+      try { localStorage.setItem('navigationCameraUrls', JSON.stringify(cameraUrls)); } catch (_) {}
+      showCameraUrls();
+    }
+  } catch (error) { message.textContent = error.message; }
+  finally { setBusy(false); }
+});
+document.getElementById('save').addEventListener('click', async () => {
+  const values = readForm({allowEmptyUrl: true});
+  if (values === null) return;
+  setBusy(true);
+  try { await post('/settings/save', values); }
+  catch (error) { message.textContent = error.message; }
+  finally { setBusy(false); }
+});
+document.getElementById('reload').addEventListener('click', async () => {
+  setBusy(true);
+  try {
+    const result = await post('/settings/reload', {});
+    fillForm(result.settings);
+    message.textContent = result.message + ' Click Connect / apply settings to use these values.';
+  } catch (error) { message.textContent = error.message; }
+  finally { setBusy(false); }
+});
+document.getElementById('disconnect').addEventListener('click', async () => {
+  setBusy(true);
+  try { await post('/disconnect', {}); }
+  catch (error) { message.textContent = error.message; }
+  finally { setBusy(false); }
+});
+const robotConnect = document.getElementById('robot-connect');
+const robotDisconnect = document.getElementById('robot-disconnect');
+const robotStart = document.getElementById('robot-start');
+const liftUp = document.getElementById('lift-up');
+const liftDown = document.getElementById('lift-down');
+const robotMessage = document.getElementById('robot-message');
+let robotState = {connection: 'disconnected', running: false, drive_connected: false};
+let robotBusy = false;
+function updateRobotButtons() {
+  robotConnect.disabled = robotBusy || ['connecting', 'connected'].includes(robotState.connection);
+  robotDisconnect.disabled = robotBusy || robotState.connection === 'disconnected';
+  robotStart.disabled = robotBusy || robotState.connection !== 'connected' || !robotState.drive_connected || robotState.running || robotState.lift_moving;
+  const liftReady = !robotBusy && robotState.connection === 'connected' && robotState.lift_connected && robotState.lift_fresh && !robotState.running && !robotState.lift_moving;
+  liftUp.disabled = liftDown.disabled = !liftReady;
+  // Stop stays available during camera settings requests and ROS connection attempts.
+}
+function showRobotState(state) {
+  robotState = state;
+  const badge = document.getElementById('robot-connection');
+  badge.dataset.state = state.running || state.lift_moving ? 'running' : state.connection;
+  badge.textContent = state.running ? 'Running' : state.lift_moving ? 'Adjusting body' : ({connected: 'Connected · stopped', connecting: 'Connecting', error: 'ROS unavailable', disconnected: 'Disconnected'}[state.connection] || state.connection);
+  document.getElementById('robot-detail').textContent = state.status;
+  for (const [id, value] of [['robot-linear', state.linear_speed], ['robot-angular', state.angular_speed]]) {
+    document.getElementById(id).textContent = Number.isFinite(value) ? value.toFixed(3) : '—';
+  }
+  document.getElementById('lift-position').textContent = Number.isFinite(state.lift_position) ? state.lift_position.toFixed(3) : '—';
+  document.getElementById('lift-detail').textContent = state.connection !== 'connected' ? 'Connect ROS to adjust body height.'
+    : !state.lift_connected ? 'Lift controller is not connected.'
+    : !state.lift_fresh ? 'Waiting for fresh lift feedback.'
+    : state.lift_moving ? 'Moving body to the requested height.' : 'Ready · 1 cm per click.';
+  updateRobotButtons();
+}
+async function robotPost(path) {
+  const values = path === '/robot/start' || path.startsWith('/robot/lift/') ? {generation: robotState.generation} : {};
+  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values)});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Robot request failed');
+  return result;
+}
+async function refreshRobot() {
+  const response = await fetch('/robot/status', {cache: 'no-store'});
+  if (!response.ok) throw new Error('Robot status is unavailable');
+  showRobotState(await response.json());
+}
+async function robotAction(path, busy = true) {
+  if (busy) { robotBusy = true; updateRobotButtons(); }
+  try {
+    const result = await robotPost(path);
+    robotMessage.textContent = result.message;
+    await refreshRobot();
+  } catch (error) { robotMessage.textContent = error.message; }
+  finally { if (busy) { robotBusy = false; updateRobotButtons(); } }
+}
+robotConnect.addEventListener('click', () => robotAction('/robot/connect'));
+robotDisconnect.addEventListener('click', () => robotAction('/robot/disconnect'));
+robotStart.addEventListener('click', () => robotAction('/robot/start'));
+liftUp.addEventListener('click', () => robotAction('/robot/lift/up'));
+liftDown.addEventListener('click', () => robotAction('/robot/lift/down'));
+document.getElementById('robot-stop').addEventListener('click', () => robotAction('/robot/stop', false));
+function stopWhenLeaving() {
+  robotState.running = false;
+  robotState.lift_moving = false;
+  if (navigator.sendBeacon) navigator.sendBeacon('/robot/stop', new Blob(['{}'], {type: 'application/json'}));
+  else fetch('/robot/stop', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', keepalive: true}).catch(() => {});
+}
+window.addEventListener('pagehide', stopWhenLeaving);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') stopWhenLeaving();
+});
+async function pollRobot() {
+  try {
+    if ((robotState.running || robotState.lift_moving) && document.visibilityState === 'visible') await robotPost('/robot/heartbeat');
+    await refreshRobot();
+  } catch (error) {
+    showRobotState({connection: 'error', running: false, drive_connected: false,
+      status: 'Browser connection lost. Navigation stops when its heartbeat expires.'});
+  } finally { setTimeout(pollRobot, 500); }
+}
+pollRobot();
+const view = document.getElementById('view');
+function refresh() { view.src = '/frame.jpg?t=' + Date.now(); }
+view.onload = () => setTimeout(refresh, 100);
+view.onerror = () => setTimeout(refresh, 300);
+refresh();
+</script>
+</body>
+</html>
