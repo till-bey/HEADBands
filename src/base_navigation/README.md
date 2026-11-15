@@ -5,7 +5,7 @@ compute P control, and call `robot.set_velocity()`. Responsibilities are split
 between:
 
 - `controller.py`: ROS-independent P control.
-- `Detect/camera/`: shared stream reader, `FrisbeeCamera` API, navigation camera
+- `perception/camera/`: shared stream reader, `FrisbeeCamera` API, navigation camera
   setup and worker, and webcam tool (also used by the website).
 - `config.py`: shared command-line options and controller configuration.
 - `navigation.py`: `BaseController` and the `RobotNavigation` adapter for ROS
@@ -20,7 +20,7 @@ between:
 
 Dependencies: ROS 2 supplies `rclpy`, `geometry_msgs`, and `sensor_msgs`; the camera/detector needs
 NumPy and OpenCV. `controller.py` itself uses only Python's standard library.
-Streamlit and Pillow are needed by the Detect dashboard, not navigation.
+Streamlit and Pillow are needed by the perception dashboard, not navigation.
 
 From the repository root, create a virtual environment using the system Python
 matching your ROS installation. `--system-site-packages` exposes ROS's system

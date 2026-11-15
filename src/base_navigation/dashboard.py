@@ -6,7 +6,7 @@ from copy import copy
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "Detect"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "perception"))
 from camera import create_camera, pixel_to_ground_robot
 
 import cv2

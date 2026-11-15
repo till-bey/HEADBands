@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 # Shared camera package also used by the website.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "Detect"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "perception"))
 from camera import CameraTargetReader, create_camera
 
 if __package__:

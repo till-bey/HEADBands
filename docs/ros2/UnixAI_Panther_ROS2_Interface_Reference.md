@@ -4,7 +4,7 @@
 
 ## Connecting from a laptop
 
-The robot runs ROS 2 Humble with CycloneDDS on `ROS_DOMAIN_ID=15`; a Jazzy laptop on the Ethernet cable sees all topics once Cyclone is pinned to the cable interface.
+The robot runs ROS 2 Humble with CycloneDDS on `ROS_DOMAIN_ID=15`. Use Humble on the laptop too: `docker/run.sh` starts a Humble shell with Cyclone pinned to the cable interface.
 
 | Device | Address | Notes |
 | --- | --- | --- |
@@ -15,10 +15,10 @@ The robot runs ROS 2 Humble with CycloneDDS on `ROS_DOMAIN_ID=15`; a Jazzy lapto
 
 SSH user is `unix_ai`; the password is on page 1 of the vendor SDK PDF (`UnixAI_Panther_SDK_English.pdf`). The vendor's message definitions live on the robot under `/home/unix_ai/work/controller` (`source /home/unix_ai/work/controller/install/setup.bash`).
 
-Setup script (`~/unixai.sh`), sourced in every robot terminal:
+Without Docker, a Humble laptop needs this in every terminal (`docker/run.sh` sets the same):
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=15
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="enx144fd7c5500d"/></Interfaces></General></Domain></CycloneDDS>'
@@ -28,9 +28,8 @@ timeout 5 ros2 daemon stop
 Pitfalls seen:
 
 - Without `CYCLONEDDS_URI`, Cyclone binds to Wi-Fi and only `/rosout` and `/parameter_events` appear.
-- Fast DDS (the Jazzy default) does not discover the robot; install `ros-jazzy-rmw-cyclonedds-cpp`.
+- Fast DDS does not discover the robot; use `rmw_cyclonedds_cpp`.
 - Unplugging the cable can hang the ROS 2 daemon; `pkill -9 -f ros2cli.daemon` clears it.
-- Humble/Jazzy mismatch: `ros2 node list` stays empty and `controller_manager_msgs` replies print garbled; topics and plain services work.
 - In bridge mode the router drops its IPv4 address; its web UI is still reachable over IPv6 link-local at `/index.html`.
 
 ## Controllers
@@ -59,7 +58,7 @@ Configured but not loaded: `lifting_forward_position_controller` (ForwardCommand
 
 The arm controllers share joints, so only one family can be active at a time. To move an arm by trajectory, deactivate `dual_arm_forward_position_controller` and activate that arm's trajectory controller with `/controller_manager/switch_controller`, then switch back (the PR 521 driver does exactly this).
 
-Open question: which controllers are `active` right now. From a Jazzy laptop, `ros2 control list_controllers` prints only the first row because the Humble `ControllerState` message differs; run it on the robot over SSH.
+Which controllers are `active` right now: `ros2 control list_controllers` from the container. Boot states are in [README.md](README.md).
 
 ## Topics
 
@@ -291,7 +290,7 @@ Every command below moves an 80 kg robot: read the current state first, keep the
 | --- | --- | --- |
 | Base `linear.x`, `linear.y` | ±0.2 m/s used by the PR 521 driver | driver choice, not a robot limit |
 | Base `angular.z` | ±0.3 rad/s used by the PR 521 driver | driver choice |
-| Lift position | SDK: 0.0–0.8 m. URDF limit 0.6; robot reads about 0.61; PR 521 caps at 0.65 | conflicting: stay under 0.6 until the vendor confirms |
+| Lift position | 0 (bottom) to 0.8 m (top), as in the SDK and the 800 mm travel in the user guide. The URDF has 0 to 0.6 with the axis pointing down, which is wrong. PR 521 caps at 0.65; the robot was seen reading about 0.61. Top not yet confirmed: echo `/lifting_controller/joint_states` at the top end stop | team, 2026-11-14; SDK |
 | Lift velocity | −0.05 to 0.05 m/s | SDK |
 | Gripper `position` | 0 = open, 1 = closed | SDK example, PR 521 |
 | `joint_head0` | −0.348 to 1.5 rad (pitch) | URDF via PR 521 |
@@ -300,7 +299,7 @@ Every command below moves an 80 kg robot: read the current state first, keep the
 
 The SDK's own lift example sends 0.75, which is above the URDF limit.
 
-**Base, keyboard teleop** (`sudo apt install ros-jazzy-teleop-twist-keyboard` first; press `z` a few times to slow down, `k` to stop):
+**Base, keyboard teleop** (installed in the container; press `z` a few times to slow down, `k` to stop):
 
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
@@ -340,8 +339,6 @@ ros2 control switch_controllers --activate left_arm_joint_trajectory_position_co
 ros2 topic pub --once /left_arm_joint_trajectory_position_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory "{joint_names: ['joint_la5'], points: [{positions: [0.2], time_from_start: {sec: 6}}]}"
 ros2 control switch_controllers --activate dual_arm_forward_position_controller --deactivate left_arm_joint_trajectory_position_controller right_arm_joint_trajectory_position_controller
 ```
-
-`ros2 control switch_controllers` from a Jazzy laptop may fail on the Humble message mismatch; run it on the robot over SSH if it does.
 
 **Ultrasonic sensors:**
 

@@ -5,13 +5,16 @@ docs/Gmail*
 build/
 install/
 log/
+
+# recorded arm motions
+teach_out/
+
 data/
 curated/
-
-
 .venv
 
-# Python bytecode
+# generated
 __pycache__/
 *.py[cod]
-
+.ipynb_checkpoints/
+*_annotated.mp4

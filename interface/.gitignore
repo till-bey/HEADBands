@@ -1,0 +1,73 @@
+# Secrets & Environment Variables (NEVER commit credentials)
+.env
+.env.*
+!.env.example
+*credentials*.json
+*service-account*.json
+*keyfile*.json
+*.pem
+*.key
+*.p12
+
+# Audio Recordings & Personal Data (Privacy by default)
+*.wav
+*.pcm
+*.raw
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.webm
+*.m4a
+data/benchmarks/audio/*
+!data/benchmarks/audio/.gitkeep
+data/benchmarks/results/*.json
+!data/benchmarks/results/.gitkeep
+
+# Model Weights & Checkpoints (NEVER commit weights)
+*.onnx
+*.onnx.json
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.gguf
+models/
+.cache/
+huggingface_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ROS 2 Workspace Build Artifacts
+robot_bridge/ros2_ws/build/
+robot_bridge/ros2_ws/install/
+robot_bridge/ros2_ws/log/
+
+# Terraform & Infrastructure State
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

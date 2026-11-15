@@ -1,0 +1,58 @@
+substitutions:
+  _REGION: europe-west6
+  _REPO: swiss-voice-repo
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # 1. Build CPU-only Swiss German ASR container (faster-whisper int8) in parallel
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build-asr"
+    waitFor: ["-"]
+    args:
+      - "build"
+      - "-f"
+      - "asr_service/Dockerfile"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/asr-service:${BUILD_ID}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/asr-service:latest"
+      - "."
+
+  # 2. Build Voice & Robotics Backend + zero-credential Web UI container in parallel
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build-backend"
+    waitFor: ["-"]
+    args:
+      - "build"
+      - "-f"
+      - "backend/Dockerfile"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/voice-backend:${BUILD_ID}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/voice-backend:latest"
+      - "."
+
+  # 3. Push images to Zurich Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push-asr"
+    waitFor: ["build-asr"]
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/asr-service"
+
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push-backend"
+    waitFor: ["build-backend"]
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/voice-backend"
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/asr-service:${BUILD_ID}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/asr-service:latest"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/voice-backend:${BUILD_ID}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/voice-backend:latest"

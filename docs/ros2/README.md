@@ -42,7 +42,7 @@ lsb_release -ds
 cat /etc/nv_tegra_release 2>/dev/null || true
 ```
 
-Match the cloud simulator to that distro. A Humble laptop cannot talk to a Jazzy graph, and controller YAML from one distro often will not load on the other.
+The robot runs Humble, and so does everything in this repo (`docker/`, `src/`). A laptop on another distro cannot talk to its graph reliably, and controller YAML from one distro often will not load on the other.
 
 Also record the RMW:
 

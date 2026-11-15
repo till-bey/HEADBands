@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "Detect"))
+sys.path.insert(0, str(ROOT / "perception"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import SETTINGS_FIELDS, validate_settings, load_settings, parse_args, save_settings

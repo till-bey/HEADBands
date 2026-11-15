@@ -13,12 +13,17 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="HEADBands",
-    maintainer_email="headbands@localhost",
+    maintainer_email="headbands@example.com",
     description="Short command publishers for the Panther.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "commands = panther_examples.commands:main",
+            "teach = panther_examples.teach:main",
+            "cartesian_follow = panther_examples.cartesian_follow:main",
+            "joint_check = panther_examples.joint_check:main",
+            "master_gui = panther_examples.master_gui:main",
+            "can_state = panther_examples.can_state:main",
         ],
     },
 )

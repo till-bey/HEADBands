@@ -3,14 +3,24 @@
   <name>panther_examples</name>
   <version>0.0.1</version>
   <description>Short command publishers for the Panther.</description>
-  <maintainer email="headbands@localhost">HEADBands</maintainer>
+  <maintainer email="headbands@example.com">HEADBands</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>control_msgs</depend>
+  <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>trajectory_msgs</depend>
   <depend>unix_msgs</depend>
+  <exec_depend>canopen_interfaces</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pykdl</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

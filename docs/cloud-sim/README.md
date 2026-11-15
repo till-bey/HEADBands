@@ -143,7 +143,7 @@ gcloud compute ssh panther-sim --zone=europe-west4-a --tunnel-through-iap
 
 Do not add a rule for `0.0.0.0/0`. The default VPC already drops unsolicited ingress; leave it that way.
 
-If the Jetson reports `jazzy`, delete this VM and recreate it with `--image-family=ubuntu-2404-lts`. The OS and the ROS distro have to match the robot. Ubuntu 22.04 pairs with Humble. Ubuntu 24.04 pairs with Jazzy. Lyrical’s tier-1 Ubuntu is 26.04, which is the wrong target unless the Orin is actually running Lyrical.
+The robot runs Humble, so the VM is Ubuntu 22.04. The OS and the ROS distro have to match the robot.
 
 Optional GPU, only after CPU sim works and only if the project has GPU quota (an L4 is `g2-standard-8`, accelerator `nvidia-l4`, maintenance `TERMINATE`):
 
@@ -168,7 +168,7 @@ gcloud compute instances start panther-sim --zone=europe-west4-a
 
 ## Software on the VM
 
-Replace `humble` with `jazzy` if that is what the Jetson printed. The block below is Humble on Ubuntu 22.04.
+Humble on Ubuntu 22.04:
 
 ```bash
 sudo apt-get update
@@ -197,13 +197,7 @@ Use `ROS_DOMAIN_ID=42` on the VM only. Keep the robot on whatever domain it alre
 
 ### MuJoCo via ros2_control
 
-On Jazzy, the documented apt install is:
-
-```bash
-sudo apt-get install -y ros-jazzy-mujoco-ros2-control ros-jazzy-mujoco-ros2-control-demos
-```
-
-On Humble, install from apt if the packages exist, otherwise build the repo (it vendors MuJoCo through `mujoco_vendor`):
+Install from apt if the Humble packages exist, otherwise build the repo (it vendors MuJoCo through `mujoco_vendor`):
 
 ```bash
 apt-cache search mujoco-ros2-control
