@@ -1,0 +1,12 @@
+project_id                  = "your-gcp-sandbox-project-id"
+region                      = "europe-west6"
+llm_location                = "global"
+gemini_model                = "gemini-3-flash-preview"
+whisper_model               = "small"
+backend_image               = "europe-west6-docker.pkg.dev/your-gcp-sandbox-project-id/swiss-voice-repo/voice-backend:latest"
+asr_image                   = "europe-west6-docker.pkg.dev/your-gcp-sandbox-project-id/swiss-voice-repo/asr-service:latest"
+allow_public_backend_access = true
+allow_non_commercial_models = true
+app_env                     = "development"
+enable_audio_bucket         = false
+enable_firestore            = false

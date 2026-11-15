@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Swiss Multilingual Voice &amp; Robotics Assistant — Leukerbad</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="swiss-cross" aria-hidden="true">+</span>
+      <div>
+        <h1>Leukerbad Voice &amp; Robotics Assistant</h1>
+        <p class="subtitle">Auto-Detect · Schwiizerdütsch (Wallisertiitsch) · Deutsch · Français · English · Español · Čeština · 中文 · Gemini Robotics ER 2</p>
+      </div>
+    </div>
+    <div class="status-cluster">
+      <span id="wsBadge" class="badge badge-neutral">WS: Disconnected</span>
+      <span id="robotBadge" class="badge badge-ok">Robot: Ready</span>
+      <button id="estopBtn" class="btn btn-estop" type="button">EMERGENCY STOP</button>
+      <button id="resetEstopBtn" class="btn btn-ghost hidden" type="button">Reset E-Stop</button>
+    </div>
+  </header>
+
+  <main class="grid-layout">
+    <!-- Left Column: Voice Controls & Live Conversation -->
+    <section class="card conversation-panel">
+      <div class="controls-row">
+        <label>
+          Language
+          <select id="languageSelect">
+            <option value="auto" selected>Auto-Detect (CH-DE / DE / FR / EN / ES / CS / 中文)</option>
+            <option value="gsw">Schwiizerdütsch (gsw)</option>
+            <option value="de-DE">Hochdeutsch (de-DE)</option>
+            <option value="de-CH">Schweizer Hochdeutsch (de-CH)</option>
+            <option value="fr-FR">Français (fr-FR)</option>
+            <option value="fr-CH">Français Suisse (fr-CH)</option>
+            <option value="en-US">English (en-US)</option>
+            <option value="en-GB">English UK (en-GB)</option>
+            <option value="es-ES">Español — España (es-ES)</option>
+            <option value="es-US">Español — Latinoamérica (es-US)</option>
+            <option value="cs-CZ">Čeština — Czech (cs-CZ)</option>
+            <option value="zh-CN">中文 — Mandarin Simplified (zh-CN)</option>
+            <option value="zh-TW">繁體中文 — Mandarin Traditional (zh-TW)</option>
+          </select>
+        </label>
+
+        <label>
+          Swiss Dialect (Piper TTS)
+          <select id="dialectSelect">
+            <option value="vs" selected>Valais / Leukerbad (Wallisertiitsch)</option>
+            <option value="zh">Zürich (Züridütsch)</option>
+            <option value="be">Bern (Bärndütsch)</option>
+            <option value="bs">Basel (Baseldytsch)</option>
+            <option value="sg">St. Gallen (Ostschwiizerdütsch)</option>
+            <option value="lu">Luzern (Lozärnerdütsch)</option>
+            <option value="ag">Aargau (Aargauerdütsch)</option>
+            <option value="gr">Graubünden (Bündnerdütsch)</option>
+          </select>
+        </label>
+
+        <label>
+          Speed (<span id="rateLabel">1.00x</span>)
+          <input id="rateSlider" type="range" min="0.7" max="1.4" step="0.05" value="1.0" />
+        </label>
+      </div>
+
+      <div class="mic-bar">
+        <button id="micToggleBtn" class="btn btn-primary" type="button">Start Microphone (16 kHz PCM)</button>
+        <button id="interruptBtn" class="btn btn-secondary" type="button">Interrupt / Stop Audio</button>
+        <div class="vad-meter-wrap" title="Voice Activity RMS Level">
+          <div id="vadMeterFill" class="vad-meter-fill"></div>
+        </div>
+        <span id="partialStatus" class="muted-text">Idle</span>
+      </div>
+
+      <div id="chatTimeline" class="chat-timeline" aria-live="polite"></div>
+
+      <form id="textTurnForm" class="text-turn-form">
+        <input
+          id="textTurnInput"
+          type="text"
+          placeholder="Speak via mic or type in English, Wallisertiitsch, Deutsch, Français, Español, Čeština, or 中文 (auto-detected)..."
+          autocomplete="off"
+        />
+        <button class="btn btn-primary" type="submit">Send &amp; Speak</button>
+      </form>
+    </section>
+
+    <!-- Right Column: Gemini Robotics ER 2 & UniX AI Panther ROS 2 Safety Gateway -->
+    <section class="card robotics-panel">
+      <h2>Gemini Robotics ER 2 &amp; UniX AI Panther ROS 2 Gateway</h2>
+      <p class="muted-text">
+        Connected to UniX AI Panther ROS 2 (<code>ROS_DOMAIN_ID=15</code>, CycloneDDS: <code>/cmd_vel</code>, <code>/head_forward_position_controller/commands</code>, <code>/lifting_controller/commands</code>, <code>/left_gripper/gripper_command</code>, <code>/right_gripper/gripper_command</code>). Orbbec Gemini 2 camera (<code>/camera/color/image_raw</code>) triggers automatically on demand when visual context is needed.
+      </p>
+      <div id="pantherTelemetryBar" class="residency-box">
+        ROS 2 Bridge: waiting for connection on <code>/ws/robot-bridge</code> · Domain ID 15
+      </div>
+
+      <form id="er2Form" class="er2-form">
+        <label>
+          Workspace Camera Frame (Optional — leave empty to auto-trigger Panther <code>/camera/color/image_raw</code>)
+          <input id="er2ImageInput" type="file" accept="image/jpeg,image/png,image/webp" />
+        </label>
+        <canvas id="er2Canvas" class="er2-canvas hidden" width="480" height="300"></canvas>
+        <label>
+          Task / Spatial Instruction
+          <input
+            id="er2Instruction"
+            type="text"
+            value="Look around, locate the frisbee on the floor, and propose a safe approach."
+            required
+          />
+        </label>
+        <div class="confirm-actions">
+          <button class="btn btn-primary" type="submit">Analyze Scene (ER 2)</button>
+          <button id="captureCameraBtn" class="btn btn-secondary" type="button">Trigger Robot Camera</button>
+        </div>
+      </form>
+
+      <div id="er2Output" class="er2-output"></div>
+
+      <h3>Pending Human Confirmations</h3>
+      <div id="confirmationsList" class="confirmations-list">
+        <p class="muted-text">No pending robot commands.</p>
+      </div>
+
+      <div id="residencyFooter" class="residency-box"></div>
+    </section>
+  </main>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
