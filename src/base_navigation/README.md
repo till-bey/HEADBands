@@ -121,8 +121,8 @@ or dashboard mode. Result timeout is in Camera, processing options are in Detect
 and P-control tuning is in Controller.
 The Detector tab also has ellipse radius limits, minimum axis ratio, contour area,
 and white fill fraction. Radius and area refer to the processing resolution.
-Rim edge lower/upper thresholds are saved as `canny_low`/`canny_high` and are
-shared with the Streamlit visualization. Older saved files default to 40/120.
+Both websites use white-mask contour ellipses for detection. Retired edge-detector
+fields in older settings files are ignored and removed on the next explicit Save.
 Use Save & apply settings to update detection; Save and Reload include these
 values. Older settings files load the previous detector defaults automatically.
 Click **Save & apply settings** to save all values to JSON and reconnect with them.

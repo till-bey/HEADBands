@@ -1,6 +1,6 @@
 # 🥏 Part 1: Ground Frisbee Finder
 
-A small **Streamlit website** to detect **frisbee rims and circular / elliptical discs** with classical OpenCV and measure their interior brightness. **No dataset, training, API key or GPU required.** It can run on a CPU.
+A small **Streamlit website** to detect **white circular / elliptical frisbee-like regions** with classical OpenCV and measure their interior brightness. **No dataset, training, API key or GPU required.** It can run on a CPU.
 
 ## Start the website
 
@@ -20,7 +20,7 @@ terminal's working directory. `uv` creates the environment from `perception/pypr
 
 On startup, Streamlit reads `src/base_navigation/settings.json`, using the same
 validation and legacy defaults as the navigation dashboard. It initializes the
-detector resolution, rim thresholds, RGB thresholds, ellipse limits, camera URL
+detector resolution, RGB thresholds, ellipse limits, camera URL
 and stream format, mounting height/tilt offsets, base height, and FOV from that file.
 **Reload saved configuration** in the sidebar picks up changes saved from the
 other dashboard. Streamlit controls remain available for temporary tuning and do
@@ -42,15 +42,23 @@ Website inputs, live camera frames, and webcam/video CLI frames use a selectable
 
 Use **Processing resolution** in the sidebar to reduce the image size. Try **320×240** first: it has one quarter as many pixels as 640×480, but may miss distant discs. Radius and area thresholds are in processing pixels and are not scaled automatically; halve radius limits and quarter area limits when halving the resolution. Narrow the radius range to the sizes you expect.
 
-The detector fits ellipses to Canny rim edges across the full image, with a white-region fallback. Rim detection does not require a white interior. Radius, area, aspect ratio, contour fit and perimeter coverage reject unsuitable candidates. White fill applies to the fallback pass.
+The detector uses RGB white thresholding, mask cleanup, and contour ellipse
+fitting. Radius, area, aspect ratio, ellipse fit, white fill, and the surrounding
+white ring checks determine accepted candidates. The original fit tolerance,
+scoring, and overlap suppression are preserved.
 
-**Mean R+G+B (0–765)** is shown in the candidate table and image annotations for
-images, selected video frames, and live camera feeds. It is the mean of each
-pixel's R+G+B within an inner ellipse whose two radii are 75% of the fitted
-ellipse's radii (56.25% of its geometric area), excluding the outer rim. Dark
+**Mean R+G+B (0–765)** and **Std dev R+G+B** are shown in the candidate table and
+image annotations for images, selected video frames, and live camera feeds.
+They are the mean and population standard deviation of each pixel's R+G+B
+within an inner ellipse whose two radii are 65% of the fitted
+ellipse's radii (42.25% of its geometric area), excluding the outer rim. Dark
 markings and non-white pixels in this inner region are included. It is measured
 before annotations, rather than using only white-threshold pixels.
 The live-frame cache retains the measurements alongside the detections.
+
+**Side** is reported in the candidate table and image annotations using the
+unrounded R+G+B population standard deviation: **0** below 30, **1** at or above
+30. This landing-face label does not change candidate acceptance or scoring.
 
 RGB preprocessing uses OpenCV channel operations, and ellipse validation scans candidate patches instead of full-image masks. The live Detection dashboard reuses results for unchanged frames/settings. Its UI still refreshes up to about 7 times per second, independently of detector processing speed.
 
@@ -71,17 +79,15 @@ settings = DetectorSettings(processing_width=320,
 # Direct frame preprocessing: prepare_frame(frame, processing_width=320).
 ```
 
-For rim detection, **Rim edge lower threshold** and **Rim edge upper threshold**
-control Canny sensitivity. Reduce the minimum ellipse aspect ratio for thin,
-tilted side views. Nested inner/outer rim contours are merged into one detection,
-keeping the outer fitted ellipse.
-
-The white-region fallback thresholds the resized image using two conditions, both required:
+The detector thresholds the resized image using two conditions, both required:
 
 - **R + G + B ≥ minimum sum** (0–765; default 160).
 - **max(R,G,B) − min(R,G,B) ≤ maximum channel difference** (0–255; default 55). This bounds every pairwise channel difference.
 
-The fallback cleans the binary mask with a 3×3 opening and 5×5 closing before fitting ellipses. The debug views show rim edges, the RGB threshold mask, and the cleaned white mask.
+The detector cleans the binary mask with a 3×3 opening and 5×5 closing before
+fitting ellipses to the mask's outer contours. The debug views show the RGB
+threshold mask and cleaned white mask. Image edges are not a candidate source.
+The RGB average does not affect detection or determine which face landed upward.
 
 The app supports local `Dataset/Images` and `Dataset/Videos` folders (including subfolders), included synthetic samples, image/video uploads, camera snapshots, and precise frame-by-frame video navigation. It displays original/annotated images, raw/cleaned white masks, a heuristic match score, and result downloads.
 
@@ -215,11 +221,12 @@ print(position)
 3. **Shape:** increase minimum aspect ratio to filter long bright lines; reduce it for edge-on discs.
 4. **Radii:** adjust for expected frisbee sizes in the resized images.
 
-The debug views show **Rim edges**, the **RGB threshold mask** before cleanup, and the **cleaned detection mask** used by the white-region fallback. The notebook compares channel-difference limits.
+The debug views show the **RGB threshold mask** before cleanup and the **cleaned
+detection mask** used for ellipse fitting. The notebook compares channel-difference limits.
 
 ## Limitations / interpreting the results
 
-- This is **not a trained image classifier**. It outputs *elliptical rim/disc candidates*, not definitive frisbee labels.
+- This is **not a trained image classifier**. It outputs *white elliptical candidates*, not definitive frisbee labels.
 - The detection scores are simple heuristics **not calibrated probabilities**.
 - White plates, lids, field markings, bright patches, and similarly shaped objects can trigger false positives.
 - It does **not** independently establish that an object actually touches the ground.

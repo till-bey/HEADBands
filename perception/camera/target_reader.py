@@ -10,7 +10,6 @@ from detector import DetectorSettings
 def create_camera(args):
     return FrisbeeCamera(
         args.url, DetectorSettings(
-            canny_low=args.canny_low, canny_high=args.canny_high,
             processing_width=args.resolution,
             rgb_sum_min=args.rgb_sum_min, channel_difference_max=args.channel_difference_max,
             min_radius=args.min_radius, max_radius=args.max_radius,

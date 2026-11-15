@@ -29,9 +29,22 @@ from website.media_utils import (
 IMAGE_DIR = ROOT / "Dataset" / "Images"
 VIDEO_DIR = ROOT / "Dataset" / "Videos"
 SAMPLE_DIR = ROOT / "samples"
-MODEL_NAME = "Frisbee rims and discs"
+MODEL_NAME = "White discs"
+DETECTION_PIPELINE_ID = "white-mask-side-std30-v2"
 
 st.set_page_config(page_title="Ground Frisbee Finder", page_icon="🥏", layout="wide")
+
+# Drop readers and cached results created by the retired pipeline on hot reload.
+if st.session_state.get("detector_pipeline_id") != DETECTION_PIPELINE_ID:
+    old_reader = st.session_state.pop("camera_reader", None)
+    if old_reader is not None:
+        old_reader.stop()
+    old_ground_camera = st.session_state.pop("ground_position_camera", None)
+    if old_ground_camera is not None:
+        old_ground_camera.close()
+    st.session_state.pop("last_live_result", None)
+    st.session_state.pop("ground_position_frame", None)
+    st.session_state["detector_pipeline_id"] = DETECTION_PIPELINE_ID
 
 
 def image_from_bytes(content: bytes) -> np.ndarray | None:
@@ -92,17 +105,19 @@ def saved_upload_path(content: bytes, filename: str) -> Path:
 def show_candidate_details(candidates) -> None:
     st.subheader("Candidate details")
     if not candidates:
-        st.info("No candidate meets the current settings. Adjust rim edge thresholds or size limits.")
+        st.info("No candidate meets the current settings. Adjust white thresholds or ellipse size limits.")
         return
     st.dataframe([
-        {"#": i, "Found by": candidate.method,
+        {"#": i, "Side": candidate.side, "Found by": candidate.method,
          "Center X": candidate.center[0], "Center Y": candidate.center[1],
          "Axis X (px)": candidate.axes[0], "Axis Y (px)": candidate.axes[1],
          "Match score (heuristic)": round(candidate.score, 3),
-         "Mean R+G+B (0–765)": round(candidate.mean_rgb_sum, 2)}
+         "Mean R+G+B (0–765)": round(candidate.mean_rgb_sum, 2),
+         "Std dev R+G+B": round(candidate.std_rgb_sum, 2)}
         for i, candidate in enumerate(candidates, start=1)
     ], hide_index=True, use_container_width=True)
-    st.caption("Mean R+G+B uses the inner 75% of both ellipse radii, excluding the outer rim. All pixels in this inner ellipse are included, including dark markings. Range: 0–765.")
+    st.caption("Mean and population standard deviation of per-pixel R+G+B use the inner 65% of both ellipse radii, excluding the outer rim. All pixels in this inner ellipse are included, including dark markings. R+G+B range: 0–765.")
+    st.caption("Side 0: standard deviation < 30. Side 1: standard deviation ≥ 30.")
 
 
 with st.sidebar:
@@ -143,11 +158,8 @@ with st.sidebar:
         help="Portrait swaps the dimensions. Lower sizes reduce work but can lose small discs. Radius and area settings use these pixels.",
     )
     st.caption("For speed, start with 320×240.")
-    st.subheader("Rim detection")
-    st.caption("Fit ellipses to the frisbee's outer edges, including tilted side views.")
-    canny_low = st.slider("Rim edge lower threshold", 0, 254, saved_configuration.get("canny_low", defaults.canny_low), key="det_canny_low")
-    canny_high = st.slider("Rim edge upper threshold", 1, 255, saved_configuration.get("canny_high", defaults.canny_high), key="det_canny_high")
-    st.subheader("White-region fallback")
+    st.subheader("White detection")
+    st.caption("Fit ellipses to contours from the cleaned white detection mask.")
     rgb_sum_min = st.slider(
         "Minimum R + G + B", 0, 765, saved_configuration.get("rgb_sum_min", defaults.rgb_sum_min), 1, key="det_rgb_sum_min",
         help="Require R + G + B to reach this value. Lower to include white discs in shadow.",
@@ -163,12 +175,11 @@ with st.sidebar:
         min_ellipse_ratio = st.number_input("Minimum ellipse aspect ratio", min_value=0.000001, max_value=1.0, value=saved_configuration.get("min_ellipse_ratio", defaults.min_ellipse_ratio), step=0.01, format="%.4f", key="det_min_ellipse_ratio")
         min_area = st.number_input("Minimum contour area (px²)", min_value=1, value=saved_configuration.get("min_area", defaults.min_area), step=1, key="det_min_area")
 
-if canny_low >= canny_high or min_radius >= max_radius:
-    st.error("Lower rim threshold and minimum radius must be below their corresponding upper values.")
+if min_radius >= max_radius:
+    st.error("Minimum radius must be below maximum radius.")
     st.stop()
 
 cfg = DetectorSettings(
-    canny_low=canny_low, canny_high=canny_high,
     processing_width=processing_width,
     rgb_sum_min=rgb_sum_min,
     channel_difference_max=channel_difference_max,
@@ -180,7 +191,7 @@ cfg = DetectorSettings(
 )
 
 st.title("🥏 Ground Frisbee Finder")
-st.write("Find frisbee rims and elliptical discs with classical computer vision, then measure their average R+G+B.")
+st.write("Find white frisbee-shaped regions with classical computer vision, then measure the mean and standard deviation of their pixel R+G+B values.")
 st.caption(f"Processing at {processing_width}×{processing_width * 3 // 4} landscape, with dimensions swapped for portrait and padding to preserve proportions. Pixel radius/area limits apply at this size.")
 
 detection_tab, position_tab = st.tabs(["Detection", "Ground position"])
@@ -256,7 +267,7 @@ with detection_tab:
                     st.warning(f"Last frame was {latest.age_seconds:.1f} s ago. {latest.status}. {latest.error or ''}")
                 height, width = latest.frame.shape[:2]
                 frame_now = prepare_frame(latest.frame, cfg.processing_width)
-                cache_key = (id(camera), latest.sequence, cfg, RGB_MEAN_RADIUS_SCALE)
+                cache_key = (id(camera), latest.sequence, cfg, RGB_MEAN_RADIUS_SCALE, DETECTION_PIPELINE_ID)
                 cached = st.session_state.get("last_live_result")
                 if cached is not None and cached["key"] == cache_key and "candidates" in cached:
                     candidates_now = cached["candidates"]
@@ -295,10 +306,9 @@ with detection_tab:
                 )
                 show_candidate_details(candidates_now)
                 if show_debug:
-                    debug_cols = st.columns(3)
+                    debug_cols = st.columns(2)
                     debug_cols[0].image(debug_now["threshold_mask"], caption="RGB threshold mask", use_container_width=True)
                     debug_cols[1].image(debug_now["white_mask"], caption="Cleaned mask used by white detector", use_container_width=True)
-                    debug_cols[2].image(debug_now["edge_mask"], caption="Rim edges used for ellipse fitting", use_container_width=True)
 
             render_live_feed()
         st.stop()
@@ -396,21 +406,18 @@ with detection_tab:
     st.caption(f"{frame_description} · detection frame {frame.shape[1]}×{frame.shape[0]}")
     show_candidate_details(candidates)
 
-    with st.expander("Debug views: rim edges and white masks", expanded=True):
-        st.caption("Rim ellipses use image edges independently of interior color. The white-region fallback uses the RGB threshold and cleaned mask.")
-        c1, c2, c3 = st.columns(3)
+    with st.expander("Debug views: RGB threshold and cleaned mask", expanded=True):
+        st.caption("Pixels pass when R + G + B reaches the minimum and channel difference stays within the maximum. Ellipse fitting uses only the cleaned white mask.")
+        c1, c2 = st.columns(2)
         with c1:
             st.markdown("**RGB threshold mask**")
             st.image(debug["threshold_mask"], clamp=True, use_container_width=True)
         with c2:
             st.markdown("**Cleaned detection mask**")
             st.image(debug["white_mask"], clamp=True, use_container_width=True)
-        with c3:
-            st.markdown("**Rim edges**")
-            st.image(debug["edge_mask"], clamp=True, use_container_width=True)
 
     ok, png = cv2.imencode(".png", annotated)
     if ok:
         st.download_button("Download annotated image", png.tobytes(), "ground_frisbee_result.png", "image/png")
 
-    st.caption("Limit: other elliptical rims, plates, markings and lids may trigger; shape alone cannot identify a frisbee or verify contact with the ground.")
+    st.caption("Limit: white elliptical plates, markings and lids may trigger; shape alone cannot identify a frisbee or verify contact with the ground.")

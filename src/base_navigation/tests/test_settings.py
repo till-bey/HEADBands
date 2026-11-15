@@ -22,7 +22,6 @@ from dashboard_server import DashboardServer
 
 def sample_values(**changes):
     values = {
-        "canny_low": 40, "canny_high": 120,
         "camera_base_height": 0.83,
         "url": "http://127.0.0.1:8080/camera.jpg",
         "snapshot": True,
@@ -123,8 +122,7 @@ class SettingsFileTests(unittest.TestCase):
                         {"horizontal_fov": 180}, {"url": "not-a-camera-url"},
                         {"min_radius": 100}, {"min_radius": 1.5}, {"max_radius": 0},
                         {"min_area": 0}, {"min_ellipse_ratio": float("nan")},
-                        {"min_ellipse_ratio": 0}, {"min_white_fraction": 1.1},
-                        {"canny_low": 150}, {"canny_high": 20}, {"canny_high": 256}):
+                        {"min_ellipse_ratio": 0}, {"min_white_fraction": 1.1}):
             with self.subTest(changes=changes), self.assertRaises((ValueError, TypeError, OverflowError)):
                 save_settings(self.path, values | changes)
             self.assertEqual(self.path.read_bytes(), before)
@@ -151,16 +149,25 @@ class SettingsFileTests(unittest.TestCase):
     def test_legacy_settings_keep_detector_defaults_without_rewriting_file(self):
         from detector import DetectorSettings
         names = ('min_radius', 'max_radius', 'min_ellipse_ratio', 'min_area', 'min_white_fraction')
-        legacy = {k: v for k, v in sample_values().items() if k not in (*names, 'camera_base_height', 'canny_low', 'canny_high')}
+        legacy = {k: v for k, v in sample_values().items() if k not in (*names, 'camera_base_height')}
         legacy['port'] = 8765
         self.path.write_text(json.dumps(legacy))
         before = self.path.read_bytes()
         loaded = load_settings(self.path)
         self.assertEqual(loaded.camera_base_height, 0.83)
-        self.assertEqual((loaded.canny_low, loaded.canny_high), (40, 120))
         for name in names:
             self.assertEqual(getattr(loaded, name), getattr(DetectorSettings(), name))
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_retired_edge_settings_are_ignored_and_removed_on_save(self):
+        values = sample_values()
+        legacy = values | {'port': 8765, 'canny_low': 40, 'canny_high': 120}
+        self.path.write_text(json.dumps(legacy))
+        loaded = load_settings(self.path)
+        self.assertEqual(vars(loaded), values | {'port': 8765})
+        self.assertEqual(json.loads(self.path.read_text()), legacy)
+        save_settings(self.path, {key: getattr(loaded, key) for key in SETTINGS_FIELDS})
+        self.assertEqual(json.loads(self.path.read_text()), values | {'port': 8765})
 
     def test_ellipse_settings_change_camera_detection(self):
         import cv2
@@ -179,7 +186,7 @@ class SettingsFileTests(unittest.TestCase):
 
 class BrowserSettingsPersistenceTests(unittest.TestCase):
     def test_saved_endpoint_reads_disk_instead_of_cached_form_values(self):
-        changed = sample_values(tilt_rad=0.9, camera_base_height=1.1, canny_low=55, canny_high=160)
+        changed = sample_values(tilt_rad=0.9, camera_base_height=1.1)
         save_settings(self.path, changed, port=8877)
         self.assertEqual(self.get_current(), self.original)
         with urlopen(self.display.url + '/settings/saved', timeout=2) as response:

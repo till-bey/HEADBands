@@ -72,7 +72,7 @@ def draw_forward_meter(frame, camera_height, tilt_rad, horizontal_fov_deg, verti
 def render_ground_position(settings: DetectorSettings, *, saved_configuration=None) -> None:
     saved = saved_configuration or {}
     st.subheader("Frisbee ground position")
-    st.caption("Uses the rim and ellipse settings in the sidebar and the imported FrisbeeCamera class. Pixel coordinates refer to the upright displayed camera image at full resolution.")
+    st.caption("Uses the white-mask and ellipse settings in the sidebar and the imported FrisbeeCamera class. Pixel coordinates refer to the upright displayed camera image at full resolution.")
     with st.form("ground_camera_form"):
         url = st.text_input("Ground-position camera URL", value=saved.get("url", ""), key="ground_cfg_url")
         mode = st.selectbox("Ground-position stream format", STREAM_MODES, index=int(saved.get("snapshot", False)), key="ground_cfg_mode")
@@ -139,7 +139,7 @@ def render_ground_position(settings: DetectorSettings, *, saved_configuration=No
                 st.caption(f"Displayed FOV: horizontal {effective_hfov:.1f}°, vertical {effective_vfov:.1f}°.")
         with results:
             if center is None:
-                st.info("No frisbee candidate detected in this frame. Adjust rim edge thresholds or ellipse size limits.")
+                st.info("No frisbee candidate detected in this frame. Adjust white thresholds or ellipse size limits.")
                 return
             px, py = center
             image_height, image_width = frame.shape[:2]

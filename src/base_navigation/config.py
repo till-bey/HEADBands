@@ -38,8 +38,6 @@ def parse_args(argv=None, *, description="Track a frisbee with simultaneous stee
     parser.add_argument("--horizontal-fov", type=float, help="Original image horizontal FOV (deg; default: %(default)s)")
     parser.add_argument("--vertical-fov", type=float, help="Original image vertical FOV (deg; default: %(default)s)")
     parser.add_argument("--resolution", type=int, choices=[320, 480, 640, 960, 1280])
-    parser.add_argument("--canny-low", type=int, help="Lower rim-edge threshold (0–254)")
-    parser.add_argument("--canny-high", type=int, help="Upper rim-edge threshold (1–255)")
     parser.add_argument("--rgb-sum-min", type=int,
                         help="Minimum R + G + B (0–765; default: %(default)s)")
     parser.add_argument("--channel-difference-max", type=int,
@@ -79,8 +77,6 @@ def parse_args(argv=None, *, description="Track a frisbee with simultaneous stee
 
 
 def validate_args(args):
-    if not 0 <= args.canny_low < args.canny_high <= 255:
-        raise ValueError("Rim thresholds must satisfy 0 <= lower < upper <= 255")
     if not math.isfinite(args.camera_base_height) or args.camera_base_height <= 0:
         raise ValueError("Camera base height must be finite and positive")
     if not 1 <= args.min_radius < args.max_radius:
@@ -114,7 +110,6 @@ def create_controller(args):
 
 
 SETTINGS_FIELDS = {
-    "canny_low": int, "canny_high": int,
     "camera_base_height": float,
     "url": str, "snapshot": bool, "robot_z": float, "tilt_rad": float,
     "horizontal_fov": float, "vertical_fov": float, "resolution": int,
@@ -172,8 +167,9 @@ def settings_from_values(values):
         # Older saved files include a detector selector; detection is now ellipse-only.
         values.pop("white_detector", None)
         values.setdefault("camera_base_height", 0.83)
-        values.setdefault("canny_low", 40)
-        values.setdefault("canny_high", 120)
+        # Retired edge-detector fields are ignored when reading older files.
+        values.pop("canny_low", None)
+        values.pop("canny_high", None)
         # Preserve previous detector behavior when opening older saved settings.
         for name, default in ELLIPSE_DEFAULTS.items():
             values.setdefault(name, default)

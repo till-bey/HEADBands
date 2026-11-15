@@ -21,7 +21,7 @@ class SavedSettingsTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'settings.json'
             values = sample_values(camera_base_height=0.95, tilt_rad=0.72, min_radius=3,
-                                   max_radius=400, min_ellipse_ratio=0.06, canny_low=45, canny_high=160)
+                                   max_radius=400, min_ellipse_ratio=0.06)
             save_settings(path, values)
             loaded, source = load_navigation_settings(path)
             self.assertEqual(loaded, values | {'port': 8765})

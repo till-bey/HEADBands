@@ -1,4 +1,4 @@
-"""Return a frisbee rim/disc center from an MJPEG/RTSP or HTTP snapshot URL.
+"""Return a white-disc center from an MJPEG/RTSP or HTTP snapshot URL.
 
 Run: python -m camera 'http://192.168.1.50:8080/stream.mjpg'
 Captured landscape frames rotate clockwise to portrait before analysis.
@@ -97,7 +97,7 @@ def pixel_to_ground_robot(
 
 
 class FrisbeeCamera:
-    """Find the strongest rim/disc candidate in each fresh camera frame.
+    """Find the strongest white-disc candidate in each fresh camera frame.
 
     Uses the same RGB white thresholds, mask cleanup, ellipse detector, and
     processing resolution as the website's white detector. Settings are passed
