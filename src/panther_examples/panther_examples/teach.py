@@ -162,18 +162,22 @@ def make_lift_msg(height):
     """Construct sensor_msgs/JointState for the lifting controller."""
     clamped = max(MIN_LIFT, min(MAX_LIFT, float(height)))
     msg = JointState()
-    msg.name = [""]
+    msg.name = ["body_joint"]
     msg.position = [clamped]
     msg.velocity = []
     msg.effort = []
     return msg
 
 
-def send_lift_command(node, height, repeat=3):
-    """Publish a lift command multiple times to ensure receipt."""
-    pub = node.create_publisher(JointState, LIFT_CMD_TOPIC, 10)
+def stream_lift_command(pub, node, height, duration_sec=1.0):
+    """Stream lift position command at 20 Hz to ensure continuous reception."""
+    deadline = time.monotonic() + 1.0
+    while pub.get_subscription_count() == 0 and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.05)
+
     msg = make_lift_msg(height)
-    for _ in range(repeat):
+    end = time.monotonic() + max(0.2, duration_sec)
+    while rclpy.ok() and time.monotonic() < end:
         pub.publish(msg)
         rclpy.spin_once(node, timeout_sec=0.05)
 
@@ -306,6 +310,12 @@ def step_adjust_height(node, step_size=0.05):
             current_height[0] = float(msg.position[0])
 
     sub = node.create_subscription(JointState, LIFT_STATE_TOPIC, on_lift_state, 10)
+    lift_pub = node.create_publisher(JointState, LIFT_CMD_TOPIC, 10)
+
+    # Wait for DDS discovery
+    deadline = time.monotonic() + 1.5
+    while lift_pub.get_subscription_count() == 0 and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.05)
     for _ in range(10):
         rclpy.spin_once(node, timeout_sec=0.05)
 
@@ -343,9 +353,10 @@ def step_adjust_height(node, step_size=0.05):
                 continue
 
         print(f"Setting lift height to: {target_height:.3f} m")
-        send_lift_command(node, target_height)
+        stream_lift_command(lift_pub, node, target_height, duration_sec=0.5)
 
     node.destroy_subscription(sub)
+    node.destroy_publisher(lift_pub)
 
     # Re-enable arms
     print("\n2. Re-enabling arms to lock them at the new height...")
@@ -568,9 +579,9 @@ def step_play(node, action_file=None):
     if initial_lift is not None:
         target_h = max(MIN_LIFT, min(MAX_LIFT, float(initial_lift)))
         print(f"Moving base lift to target height: {target_h:.3f} m...")
-        send_lift_command(node, target_h, repeat=5)
-        # Give torso lift time to complete movement
-        time.sleep(3.0)
+        lift_pub = node.create_publisher(JointState, LIFT_CMD_TOPIC, 10)
+        stream_lift_command(lift_pub, node, target_h, duration_sec=3.0)
+        node.destroy_publisher(lift_pub)
         print("Base height positioning complete.")
 
     # 2. Re-enable arm joints and gripper hardware
