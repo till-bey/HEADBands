@@ -490,7 +490,11 @@ def test_headbands_clean_up_throw_trajectory_gripper_sentinel_and_detector() -> 
         now_utc=now,
     )
     assert throw_plan.master_trajectory_joints is not None
-    assert throw_plan.master_trajectory_joints[0] == "joint_ra0"
+    assert throw_plan.master_trajectory_joints[:9] == tuple(f"joint_la{i}" for i in range(8)) + ("joint_ra0",)
+    from swiss_robot_bridge.panther_topics import THROW_LEFT_ARM
+
+    assert {q[:8] for _, q, _ in throw_plan.master_trajectory_points} == {THROW_LEFT_ARM}  # left arm held
+    assert throw_plan.lift_position_m == pytest.approx(0.55)
     assert throw_plan.master_trajectory_joints[-1] == "joint_rf"
     assert len(throw_plan.master_trajectory_points) >= 5
     import time as _time

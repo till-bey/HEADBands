@@ -140,13 +140,15 @@ THROW_FILES: dict[str, str] = {
 }
 DEFAULT_THROW = "standard"
 THROW_PAUSE_S = 1.0  # held at the first row before and after the gripper's first command
+THROW_LIFT_M = 0.55  # the lift goes here first; the arms wait until it has arrived
+THROW_LEFT_ARM: tuple[float, ...] = (-0.05, 0.11, 1.42, -0.03, -1.39, -0.18, 0.05, -0.07)  # joint_la0..7, held during a throw
 
 # Disk pickup ("pick up the disk" = pick_object, object_label "disk"): both arms through the joint-state dumps
 # 1.txt..4.txt in HEADBands `motion/pickup/key_points/`, as `ros2 run panther_examples pickup` plays them.
 PICKUP_DIR = Path(__file__).resolve().parents[6] / "motion" / "pickup" / "key_points"
 PICKUP_PHASE_S = 8.0  # per key pose, at least (slower if a joint would pass 0.9 x MAX_ARM_JOINT_VEL_RPS)
 PICKUP_PAUSE_S = 1.0  # held between key poses
-PICKUP_LIFT_M = 0.2  # lift height for the whole pickup
+PICKUP_LIFT_M = 0.19  # lift height for the whole pickup
 PICKUP_SCRAPE_GRIP = 0.5  # right gripper after the scrape (pose 3); closed when the move away (pose 4) starts
 PICKUP_CLOSE_S = 0.5  # that close ramps over this long, ending as the move away starts (<= PICKUP_PAUSE_S)
 

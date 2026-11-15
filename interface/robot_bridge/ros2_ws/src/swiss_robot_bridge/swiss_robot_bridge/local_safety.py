@@ -42,6 +42,8 @@ from swiss_robot_bridge.panther_topics import (
     PICKUP_LIFT_M,
     THROW_DIR,
     THROW_FILES,
+    THROW_LEFT_ARM,
+    THROW_LIFT_M,
     THROW_PAUSE_S,
     RIGHT_ARM_JOINTS,
     RIGHT_GRIPPER_MAX,
@@ -188,6 +190,9 @@ def load_key_pose(path: Path) -> tuple[float, ...]:
         raise ValueError(f"{path.name}: missing or non-finite joints {missing}")
     return tuple(_clamp(pose[j], *ARM_JOINT_LIMITS[j]) for j in LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS)
 
+
+if not all(lo <= q <= hi for q, (lo, hi) in zip(THROW_LEFT_ARM, (ARM_JOINT_LIMITS[j] for j in LEFT_ARM_JOINTS))):
+    raise ValueError(f"THROW_LEFT_ARM {THROW_LEFT_ARM} outside the left arm's joint limits")
 
 # Loaded once, like THROWS: a missing or bad key pose stops the bridge at start.
 PICKUP_POSES = [load_key_pose(PICKUP_DIR / f"{i}.txt") for i in range(1, 5)]
@@ -790,12 +795,13 @@ class LocalSafetySupervisor:
             plan.gripper_velocity = 1.0
             plan.head_positions = self._compute_head_joints(cmd)
             plan.head_targets = self._head_targets(cmd)
-            plan.master_trajectory_joints = RIGHT_ARM_JOINTS + ("joint_rf",)
-            plan.master_trajectory_points = throw_points(self.throw_speed, cmd.throw_variant)
+            plan.master_trajectory_joints = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS + ("joint_rf",)
+            plan.master_trajectory_points = [  # the left arm holds THROW_LEFT_ARM out of the way
+                (t, THROW_LEFT_ARM + q, g) for t, q, g in throw_points(self.throw_speed, cmd.throw_variant)
+            ]
             plan.switch_arm_trajectory_controllers = True
             plan.trigger_camera = True
-            if cmd.target is not None and cmd.target.z > 0.01:
-                plan.lift_position_m = round(_clamp(cmd.target.z, LIFT_MIN_M, LIFT_MAX_M), 4)
+            plan.lift_position_m = THROW_LIFT_M  # the bridge holds the arms until the lift is there
 
         elif cmd.action == "generated_gesture":
             if cmd.gesture is None:

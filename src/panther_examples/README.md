@@ -17,7 +17,7 @@ Robot scripts. Run them in the container (`docker/run.sh`, or `docker/run.sh --s
 [`motion/pickup/key_points/`](../../motion/pickup/key_points/) (`ros2 topic echo /joint_states --once` dumps) on both
 arms:
 
-1. lift to `--body-height` (0.2 m, kept for the whole pickup), both grippers open, move to `1.txt`
+1. lift to `--body-height` (0.19 m, kept for the whole pickup), both grippers open, move to `1.txt`
 2. `2.txt`
 3. `3.txt`, then the right gripper to `--scrape-grip` (0.5)
 4. right gripper closed over `--gripper-close-seconds` (0.5 s), then `4.txt` (move away)

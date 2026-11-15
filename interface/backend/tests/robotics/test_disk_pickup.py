@@ -44,7 +44,7 @@ def test_bridge_plays_the_key_poses_safely() -> None:
         },
         now_utc=now,
     )
-    assert plan.master_trajectory_joints == PICKUP_JOINTS and plan.lift_position_m == pytest.approx(0.2)
+    assert plan.master_trajectory_joints == PICKUP_JOINTS and plan.lift_position_m == pytest.approx(0.19)
     pts = plan.master_trajectory_points
     assert len(pts) == 11  # 4 poses + 3 holds + 4 steps of the gripper close ramp
     arms = [n for n in PICKUP_JOINTS if n in ARM_JOINT_LIMITS]
@@ -57,3 +57,27 @@ def test_bridge_plays_the_key_poses_safely() -> None:
     assert rf == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.0])  # ramps closed before the move away
     assert pts[-2][0] - pts[5][0] == pytest.approx(0.4)  # 0.6 at -0.4 s ... 1.0 when the move away starts
     assert plan.trajectory_duration_seconds == pts[-1][0]
+
+
+def test_throw_waits_for_the_lift_with_the_arms_held() -> None:
+    from swiss_robot_bridge.bridge_node import ROS2HardwareAdapter
+    from swiss_robot_bridge.camera_manager import PantherCameraManager
+
+    now = datetime.now(tz=UTC)
+    sup = LocalSafetySupervisor()
+    plan = sup.validate_and_compute_panther_plan(
+        {"command_id": "t", "action": "throw_object", "object_label": "frisbee", "confirmed_by_human": True,
+         "expires_at": (now + timedelta(seconds=30)).isoformat()},
+        now_utc=now,
+    )
+    hw = ROS2HardwareAdapter(supervisor=sup, camera_manager=PantherCameraManager(allow_sim_fallback=True))
+    hw.lift_height_m = 0.19
+    current = {n: 0.0 for n in plan.master_trajectory_joints}
+    current.update({f"joint_la{i}": q for i, q in enumerate(plan.master_trajectory_points[0][1][:8])})
+    current.update({f"joint_ra{i}": q for i, q in enumerate(plan.master_trajectory_points[0][1][8:16])})
+    hw.joint_positions.update(current)  # arms already at the throw's start: only the lift wait remains
+    hw.apply_panther_plan(plan)
+    pts = hw.last_master_trajectory
+    assert pts[0][0] == pytest.approx((0.55 - 0.19) / 0.05)  # held where they are until the lift is at 0.55
+    assert pts[0][1] == tuple(current[n] for n in plan.master_trajectory_joints[:16])
+    assert all(b[0] > a[0] for a, b in zip(pts, pts[1:]))

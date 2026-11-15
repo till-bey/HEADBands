@@ -643,15 +643,26 @@ class ROS2HardwareAdapter:
         elif plan.head_positions is not None:
             self.publish_head(plan.head_positions[0], plan.head_positions[1])
 
+        lift_wait = 0.0
         if plan.lift_position_m is not None:
+            if plan.action == "throw_object":  # lift first: unknown height counts as the bottom, the longest wait
+                lift_wait = abs(plan.lift_position_m - (self.lift_height_m or 0.0)) / plan.lift_velocity_mps
             self.publish_lift(plan.lift_position_m, plan.lift_velocity_mps)
 
         if plan.master_trajectory_points:
             if plan.master_trajectory_joints:
                 # The arm may be anywhere: give it time to reach the first point slowly.
+                names = tuple(plan.master_trajectory_joints)
                 plan.master_trajectory_points = retime_from_current_pose(
-                    tuple(plan.master_trajectory_joints), plan.master_trajectory_points, self.joint_positions
+                    names, plan.master_trajectory_points, self.joint_positions
                 )
+                arm_names = [n for n in names if n.startswith(("joint_la", "joint_ra"))]
+                if lift_wait > 0.0 and all(n in self.joint_positions for n in arm_names):
+                    # hold the arms where they are until the lift arrives, then play the trajectory
+                    hold = tuple(float(self.joint_positions[n]) for n in arm_names)
+                    plan.master_trajectory_points = [(round(lift_wait, 4), hold, None)] + [
+                        (round(max(t, 0.05) + lift_wait, 4), q, g) for t, q, g in plan.master_trajectory_points  # after the hold
+                    ]
             self.publish_master_trajectory(plan)
 
         traj_grippers = set(plan.master_trajectory_joints or ()) & {"joint_lf", "joint_rf"}

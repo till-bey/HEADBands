@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Disk pickup from the floor: plays the joint-space key poses motion/pickup/key_points/1.txt..4.txt on both arms.
 
-Lift at --body-height (0.2 m) throughout. 1 prepare position (grippers open); 2 prepare; 3 scrape, right gripper to --scrape-grip;
+Lift at --body-height (0.19 m) throughout. 1 prepare position (grippers open); 2 prepare; 3 scrape, right gripper to --scrape-grip;
 4 move away, right gripper closed at its start. The web interface plays the same sequence through the bridge
 ("pick up the disk"; swiss_robot_bridge.local_safety.pickup_points).
 """
@@ -147,7 +147,7 @@ def run_dual_goals(node, clients, goals) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key-point-dir", type=Path, default=DEFAULT_KEY_POINT_DIR)
-    parser.add_argument("--body-height", type=float, default=0.2, help="lift height for the whole pickup (m)")
+    parser.add_argument("--body-height", type=float, default=0.19, help="lift height for the whole pickup (m)")
     parser.add_argument("--scrape-grip", type=float, default=0.5, help="right gripper after the scrape (0 open..1 closed)")
     parser.add_argument("--gripper-close-seconds", type=float, default=0.5, help="right gripper close ramp before the move away")
     parser.add_argument("--phase-seconds", type=float, default=8.0, help="time per key pose")
