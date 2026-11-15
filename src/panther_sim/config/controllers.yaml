@@ -15,13 +15,13 @@ controller_manager:
     # Sim only, for rqt: switch it in for head_forward_position_controller, as for the arms.
     head_joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
-    # Sim only: robot_topics.py serves the robot's lifting_controller and gripper topics through these
+    # Robot names, but trajectory controllers: robot_topics serves the robot's lift and gripper topics through them
     # (the robot's controllers are vendor plugins, not available here).
-    lifting_joint_trajectory_controller:
+    lifting_controller:
       type: joint_trajectory_controller/JointTrajectoryController
-    left_gripper_joint_trajectory_controller:
+    left_unix_gripper3_controller:
       type: joint_trajectory_controller/JointTrajectoryController
-    right_gripper_joint_trajectory_controller:
+    right_unix_gripper3_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 dual_arm_forward_position_controller:
@@ -53,19 +53,19 @@ head_joint_trajectory_controller:
     command_interfaces: [position]
     state_interfaces: [position, velocity]
 
-lifting_joint_trajectory_controller:
+lifting_controller:
   ros__parameters:
     joints: [body_joint]
     command_interfaces: [position]
     state_interfaces: [position, velocity]
 
-left_gripper_joint_trajectory_controller:
+left_unix_gripper3_controller:
   ros__parameters:
     joints: [joint_lf]
     command_interfaces: [position]
     state_interfaces: [position, velocity]
 
-right_gripper_joint_trajectory_controller:
+right_unix_gripper3_controller:
   ros__parameters:
     joints: [joint_rf]
     command_interfaces: [position]

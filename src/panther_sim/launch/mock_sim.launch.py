@@ -14,14 +14,17 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable, UnsetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from panther_examples.robot import LIFT_VEL, MAX_LIFT as LIFT_TOP  # the vendor body height is the top of the travel
+from panther_examples import robot as r
 
 SHARE = get_package_share_directory("panther_sim")
-ARM_HEAD = [f"joint_{s}a{i}" for s in "lr" for i in range(8)] + ["joint_head0", "joint_head1"]
-# Lift (base z axis) and grippers: the vendor URDF has them fixed; robot_description() frees them.
-LIFT_GRIPPERS = ["body_joint", "joint_lf", "joint_rf"]
+LIFT_TOP = r.MAX_LIFT  # the vendor body height is the top of the travel
+ARM_HEAD = r.ARMS + r.HEAD
 FINGER_CLOSE = 0.7  # rad of stand-in finger swing at gripper 1.0 (closed); looks right, not a vendor value
 WHEELS = [f"joint_{w}_{k}" for w in ("fl", "fr", "bl", "br") for k in ("rev", "con")]
+# One mock system per robot hardware component, same names, so hardware lifecycle calls (teach.py) work here.
+# The lift and grippers are fixed in the vendor URDF; robot_description() frees them.
+HARDWARE = {r.LEFT_HARDWARE: r.LEFT_ARM, r.RIGHT_HARDWARE: r.RIGHT_ARM, r.LEFT_GRIPPER_HARDWARE: ["joint_lf"],
+            r.RIGHT_GRIPPER_HARDWARE: ["joint_rf"], "mh3_head": r.HEAD, "mh3_movebase": ["body_joint"]}
 # The vendor URDF gives every arm joint velocity="0"; rqt divides by it. 0.5 rad/s is our choice;
 # the vendor publishes no limit (PR #521 moves the arms at 0.35 rad/s average).
 SIM_ARM_VEL = "0.5"
@@ -73,7 +76,7 @@ def robot_description(urdf_path, mesh_dir):
         lift = by_name["body_joint"]
         lift.set("type", "prismatic")
         lift.find("axis").set("xyz", "0 0 1")
-        lift.find("limit").attrib.update(lower="0", upper=str(LIFT_TOP), velocity=str(LIFT_VEL))
+        lift.find("limit").attrib.update(lower="0", upper=str(LIFT_TOP), velocity=str(r.LIFT_VEL))
         x, y, z = (float(v) for v in lift.find("origin").get("xyz").split())
         lift.find("origin").set("xyz", f"{x} {y} {z - LIFT_TOP}")
     for s in "lr":
@@ -94,14 +97,15 @@ def robot_description(urdf_path, mesh_dir):
     if not any(l.find("visual") is not None for l in root.findall("link")):
         add_primitive_visuals(root)
 
-    joints = "".join(
-        f'<joint name="{j}"><command_interface name="position"/>'
-        f'<state_interface name="position"><param name="initial_value">{LIFT_TOP / 2 if j == "body_joint" else 0.0}</param>'
-        '</state_interface><state_interface name="velocity"/></joint>' for j in ARM_HEAD + LIFT_GRIPPERS)
-    # Wheels are state-only so robot_state_publisher gets a TF for them.
-    joints += "".join(f'<joint name="{j}"><state_interface name="position"/></joint>' for j in WHEELS)
-    root.append(ET.fromstring('<ros2_control name="panther_mock" type="system"><hardware>'
-                              '<plugin>mock_components/GenericSystem</plugin></hardware>' + joints + "</ros2_control>"))
+    for hw, names in HARDWARE.items():
+        joints = "".join(
+            f'<joint name="{j}"><command_interface name="position"/>'
+            f'<state_interface name="position"><param name="initial_value">{LIFT_TOP / 2 if j == "body_joint" else 0.0}</param>'
+            '</state_interface><state_interface name="velocity"/></joint>' for j in names)
+        if hw == "mh3_movebase":  # wheels are state-only so robot_state_publisher gets a TF for them
+            joints += "".join(f'<joint name="{j}"><state_interface name="position"/></joint>' for j in WHEELS)
+        root.append(ET.fromstring(f'<ros2_control name="{hw}" type="system"><hardware>'
+                                  '<plugin>mock_components/GenericSystem</plugin></hardware>' + joints + "</ros2_control>"))
     xml = ET.tostring(root, encoding="unicode")
     if mesh_dir:
         xml = xml.replace(VENDOR_MESHES, "file://" + os.path.abspath(os.path.expanduser(mesh_dir)))
@@ -118,12 +122,10 @@ def nodes(context):
              parameters=[os.path.join(SHARE, "config", "controllers.yaml")], output="screen"),
         # As on the robot: the forward controller owns both arms; the per-arm trajectory controllers
         # are loaded inactive and switched in for a move (cartesian_follow.py, PR #521 driver).
-        spawn("joint_state_broadcaster", "dual_arm_forward_position_controller", "head_forward_position_controller",
-              "lifting_joint_trajectory_controller", "left_gripper_joint_trajectory_controller",
-              "right_gripper_joint_trajectory_controller"),
-        spawn("--inactive", "left_arm_joint_trajectory_position_controller",
-              "right_arm_joint_trajectory_position_controller", "head_joint_trajectory_controller"),
-        # The robot's lift and gripper topics (its controllers for them are vendor plugins).
+        spawn("joint_state_broadcaster", r.FORWARD, r.HEAD_FORWARD,
+              r.LIFT_CONTROLLER, r.LEFT_GRIPPER_CONTROLLER, r.RIGHT_GRIPPER_CONTROLLER),
+        spawn("--inactive", r.LEFT_TRAJ, r.RIGHT_TRAJ, "head_joint_trajectory_controller"),
+        # The robot's lift and gripper topics and CAN enable/disable services (vendor plugins on the robot).
         Node(package="panther_sim", executable="robot_topics", output="screen"),
         Node(package="rviz2", executable="rviz2", arguments=["-d", os.path.join(SHARE, "config", "panther.rviz")]),
         Node(package="rqt_joint_trajectory_controller", executable="rqt_joint_trajectory_controller"),
@@ -132,13 +134,12 @@ def nodes(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        # rqt_joint_trajectory_controller 4.42 never finds the controller manager under Fast DDS
-        # (fresh node per lookup, queried before discovery). The robot runs Cyclone anyway.
+        # rqt_joint_trajectory_controller can miss the controller manager under Fast DDS. The robot runs Cyclone anyway.
         SetEnvironmentVariable("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp"),
         # Never join the robot's graph, whatever the terminal has: the sim uses the robot's
         # controller names, so on the robot's domain rqt could command the real arms.
         SetEnvironmentVariable("ROS_DOMAIN_ID", SIM_DOMAIN),
-        SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST"),
+        SetEnvironmentVariable("ROS_LOCALHOST_ONLY", "1"),  # Humble; Iron+ would use ROS_AUTOMATIC_DISCOVERY_RANGE
         UnsetEnvironmentVariable("CYCLONEDDS_URI"),  # robot setups pin it to the robot's NIC
         DeclareLaunchArgument("urdf", default_value=os.path.join(SHARE, "urdf", "panther.urdf")),
         DeclareLaunchArgument("meshes", default_value=""),

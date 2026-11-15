@@ -1,4 +1,4 @@
-"""Sim only: the robot's lift and gripper topics, served on top of the sim's trajectory controllers.
+"""Sim only: the robot's lift and gripper topics and CAN services, served on top of the sim's trajectory controllers.
 
 On the robot these are vendor plugins (lifting_controller3, omni_picker_controller) that only exist there.
 This node gives the same topics and message types, so code written for the robot runs here unchanged:
@@ -7,23 +7,27 @@ This node gives the same topics and message types, so code written for the robot
   /left_gripper/gripper_command     unix_msgs/GripperCommand    command.position 0 open .. 1 closed
   /right_gripper/gripper_command    unix_msgs/GripperCommand
   /lifting_controller/joint_states, /left_gripper/joint_states, /right_gripper/joint_states (state out)
+  /can0|can1/joint_*/enable|disable  std_srvs/Trigger            always succeed (mock hardware has no torque to drop)
 
 Started by mock_sim.launch.py. The gripper topics need unix_msgs sourced before the launch.
 """
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-from panther_examples.robot import LIFT_VEL, MAX_LIFT as LIFT_MAX, MIN_LIFT as LIFT_MIN
+from panther_examples.robot import (ARMS, LEFT_GRIPPER_CONTROLLER, LEFT_GRIPPER_STATE_TOPIC, LIFT_CONTROLLER, LIFT_STATE_TOPIC,
+                                    LIFT_VEL, MAX_LIFT as LIFT_MAX, MIN_LIFT as LIFT_MIN, RIGHT_GRIPPER_CONTROLLER,
+                                    RIGHT_GRIPPER_STATE_TOPIC, can_service)
 
 # shortcut: gripper speed when a command gives none; the real gripper speed is unmeasured, time it on the robot.
 GRIPPER_VEL = 1.0  # full stroke per second
 # joint: (sim controller, robot state topic)
 JOINTS = {
-    "body_joint": ("lifting_joint_trajectory_controller", "/lifting_controller/joint_states"),
-    "joint_lf": ("left_gripper_joint_trajectory_controller", "/left_gripper/joint_states"),
-    "joint_rf": ("right_gripper_joint_trajectory_controller", "/right_gripper/joint_states"),
+    "body_joint": (LIFT_CONTROLLER, LIFT_STATE_TOPIC),
+    "joint_lf": (LEFT_GRIPPER_CONTROLLER, LEFT_GRIPPER_STATE_TOPIC),
+    "joint_rf": (RIGHT_GRIPPER_CONTROLLER, RIGHT_GRIPPER_STATE_TOPIC),
 }
 
 
@@ -58,6 +62,7 @@ class RobotTopics(Node):
         self.traj = {j: self.create_publisher(JointTrajectory, f"/{c}/joint_trajectory", 10) for j, (c, _) in JOINTS.items()}
         self.state = {j: self.create_publisher(JointState, t, 10) for j, (_, t) in JOINTS.items()}
         self.create_subscription(JointState, "/joint_states", self.on_states, 10)
+        self.can = [self.create_service(Trigger, can_service(j, v), self.ok) for j in ARMS for v in ("enable", "disable")]
         self.create_subscription(JointState, "/lifting_controller/commands",
                                  lambda m: self.move("body_joint", lift_goal(m, self.pos.get("body_joint", 0.0))), 10)
         try:
@@ -68,6 +73,10 @@ class RobotTopics(Node):
         for side in "lr":
             self.create_subscription(GripperCommand, f"/{'left' if side == 'l' else 'right'}_gripper/gripper_command",
                                      lambda m, j=f"joint_{side}f": self.move(j, gripper_goal(m)), 10)
+
+    def ok(self, _request, response):
+        response.success = True
+        return response
 
     def move(self, joint, goal):
         if goal is None:
