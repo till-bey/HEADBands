@@ -1,0 +1,15 @@
+{
+  "benchmark_version": "1.0.0",
+  "dialects_covered": [
+    {"code": "vs", "name": "Wallisertiitsch (Valais / Leukerbad)", "utterance": "Grüezi mitenand, wier sind hüt z Leukerbad und s Wätter isch güet."},
+    {"code": "zh", "name": "Züridütsch (Zürich)", "utterance": "Grüezi wohl, mir händ z Züri hüt vil z schaffe mit em Roboter."},
+    {"code": "be", "name": "Bärndütsch (Bern)", "utterance": "Grüessech mitenand, ig ha nid gwüsst wie schnäu das geit."},
+    {"code": "bs", "name": "Baseldytsch (Basel)", "utterance": "Sali zämme, mir luege hüt z Basel wie dr Assischtänt funktioniert."},
+    {"code": "sg", "name": "Ostschwiizerdütsch (St. Gallen)", "utterance": "Grüezi wohl, chasch du mir bitte säge wie s Wätter z Sankt Galle isch?"}
+  ],
+  "licenses_checked": {
+    "openai_whisper_faster_whisper": "MIT",
+    "piper_engine_piper1_gpl": "GPL-3.0 / MIT runtime bindings",
+    "d41k4n_piper_swissdial_voices": "CC BY-NC 4.0 (Non-Commercial ONLY)"
+  }
+}

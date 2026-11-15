@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  asr-service:
+    build:
+      context: .
+      dockerfile: asr_service/Dockerfile
+    container_name: swiss-asr-cpu
+    environment:
+      - PORT=8081
+      - WHISPER_MODEL=${WHISPER_MODEL:-small}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_CPU_THREADS=${WHISPER_CPU_THREADS:-4}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: swiss-voice-backend
+    env_file:
+      - .env.example
+    environment:
+      - PORT=8080
+      - ASR_ENDPOINT=http://asr-service:8081
+      - ASR_AUTH_ENABLED=false
+      - SERVE_FRONTEND=true
+    ports:
+      - "8080:8080"
+    depends_on:
+      asr-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

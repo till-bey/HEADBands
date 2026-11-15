@@ -1,0 +1,29 @@
+# Prevent uploading local virtualenvs, caches, or weights during gcloud builds submit
+.git
+.gitignore
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local model caches (Cloud Build pulls directly on GCP high-speed backbone)
+backend/models/
+models/
+.cache/
+huggingface_cache/
+
+# Local audio / benchmark outputs & Terraform state
+*.wav
+*.pcm
+*.onnx
+*.bin
+data/benchmarks/audio/*
+data/benchmarks/results/*.json
+infrastructure/terraform/.terraform/
+*.tfstate*
+*.tfvars
+.env
