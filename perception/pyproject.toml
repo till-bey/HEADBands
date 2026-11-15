@@ -1,11 +1,8 @@
 [project]
-name = "detect"
+name = "perception"
 version = "0.1.0"
-description = "Add your description here"
+description = "Frisbee detection: OpenCV detector, Streamlit site, YOLO training (ml group)."
 readme = "README.md"
-authors = [
-    { name = "Petr Šícho", email = "xmen097@pm.me" }
-]
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26,<3",
@@ -14,9 +11,18 @@ dependencies = [
     "streamlit>=1.40,<2",
 ]
 
-[project.scripts]
-detect = "detect:main"
+[dependency-groups]
+dev = ["pytest>=8"]
+ml = [
+    "ultralytics>=8.4.0",
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
+    "roboflow>=1.1.0",
+    "matplotlib>=3.8.0",
+    "jupyterlab>=4.0",
+    "ipykernel>=6.0",
+    "PyYAML>=6.0",
+]
 
-[build-system]
-requires = ["uv_build>=0.12.17,<0.13.0"]
-build-backend = "uv_build"
+[tool.uv]
+package = false

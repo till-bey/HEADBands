@@ -5,11 +5,7 @@ A small **Streamlit website** to detect **white, roughly circular / elliptical f
 ## Start the website
 
 ```bash
-python -m venv .venv
-# Linux / macOS: source .venv/bin/activate
-# Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python -m streamlit run website/app.py
+uv run streamlit run website/app.py   # from perception/; uv creates .venv from pyproject.toml
 ```
 
 Open the address printed in the terminal (normally `http://localhost:8501`).
@@ -58,7 +54,7 @@ The debug views show the **RGB threshold mask** before cleanup and the **cleaned
 ## Project files
 
 ```
-frisbee_ground_cv/
+perception/
 ├── Dataset/            # Your images and videos (demo files included)
 │   ├── Images/
 │   └── Videos/
@@ -74,23 +70,25 @@ frisbee_ground_cv/
 │   └── make_samples.py
 ├── ground_frisbee_demo.ipynb # Interactive notebook example
 ├── samples/            # Four generated test images and sample MP4
-├── tests/test_detector.py
-├── requirements.txt
+├── tests/
+├── ML/                 # YOLO notebook and pipeline (uv sync --group ml)
+├── ultralytics_dataset/ # YOLO frames, labels, exp.pt
+├── pyproject.toml      # deps: uv sync (site), uv sync --group ml (YOLO)
 └── README.md
 ```
 
 To regenerate test examples: `python -m sample_generator.make_samples`. Generated images and the demo MP4 are stored in `samples/`. Select **Sample image** or **Sample video** in the website to view them.
 
-For the optional notebook, install `jupyterlab`, open `ground_frisbee_demo.ipynb`, and run its cells in order.
+For the notebooks, run `uv sync --group ml`, then `uv run jupyter lab` and open `ground_frisbee_demo.ipynb` or `ML/frisbee_detection.ipynb`.
 
-To run tests: `python -m pytest tests -q` (install `pytest` if missing).
+To run tests: `uv run pytest tests -q`. If a ROS setup is sourced in the shell, run `env -u PYTHONPATH uv run pytest tests -q`: ROS pytest plugins break the venv.
 
 ## NEW: Browse local Dataset folders (image files + individual video frames)
 
 Put your own media inside the folders below. These are relative to the **project root**, so they work even if you start Streamlit from somewhere else:
 
 ```text
-frisbee_ground_cv/
+perception/
 ├── Dataset/
 │   ├── Images/
 │   │   ├── example_round_white_disc.png      # synthetic demo; replace with your photos
