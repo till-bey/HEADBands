@@ -148,6 +148,7 @@ PICKUP_PHASE_S = 8.0  # per key pose, at least (slower if a joint would pass 0.9
 PICKUP_PAUSE_S = 1.0  # held between key poses
 PICKUP_LIFT_M = 0.2  # lift height for the whole pickup
 PICKUP_SCRAPE_GRIP = 0.5  # right gripper after the scrape (pose 3); closed when the move away (pose 4) starts
+PICKUP_CLOSE_S = 0.5  # that close ramps over this long, ending as the move away starts (<= PICKUP_PAUSE_S)
 
 PANTHER_COMMAND_TOPICS: tuple[str, ...] = (
     TOPIC_CMD_VEL,

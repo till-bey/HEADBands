@@ -149,13 +149,14 @@ def main() -> None:
     parser.add_argument("--key-point-dir", type=Path, default=DEFAULT_KEY_POINT_DIR)
     parser.add_argument("--body-height", type=float, default=0.2, help="lift height for the whole pickup (m)")
     parser.add_argument("--scrape-grip", type=float, default=0.5, help="right gripper after the scrape (0 open..1 closed)")
+    parser.add_argument("--gripper-close-seconds", type=float, default=0.5, help="right gripper close ramp before the move away")
     parser.add_argument("--phase-seconds", type=float, default=8.0, help="time per key pose")
     parser.add_argument("--between-delay", type=float, default=1.0, help="pause between key poses (s)")
     parser.add_argument("--dry-run", action="store_true", help="load and check the key poses, do not move")
     args = parser.parse_args()
     if not 0.0 <= args.body_height <= 0.8:
         raise SystemExit("--body-height must be between 0 and 0.8 m")
-    if not 0.0 <= args.scrape_grip <= 1.0 or args.phase_seconds <= 0 or args.between_delay < 0:
+    if not 0.0 <= args.scrape_grip <= 1.0 or args.phase_seconds <= 0 or args.between_delay < 0 or args.gripper_close_seconds <= 0:
         raise SystemExit("--scrape-grip must be in [0, 1], --phase-seconds positive, --between-delay non-negative")
 
     rclpy.init()
@@ -189,7 +190,9 @@ def main() -> None:
             if index:
                 spin_for(node, args.between_delay)
             if index == 3:
-                publish_gripper(node, RIGHT_GRIPPER_CMD_TOPIC, 1.0)  # close at the start of the move away
+                for value in np.linspace(args.scrape_grip, 1.0, max(2, round(args.gripper_close_seconds / 0.05)))[1:]:
+                    publish_gripper(node, RIGHT_GRIPPER_CMD_TOPIC, value)  # gentle close, then the move away
+                    spin_for(node, 0.05)
             run_dual_goals(node, clients, [make_goal(c.names, q, args.phase_seconds) for c, q in zip(chains, joints)])
             print(f"{name} reached")
             if index == 2:

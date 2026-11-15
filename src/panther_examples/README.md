@@ -20,7 +20,7 @@ arms:
 1. lift to `--body-height` (0.2 m, kept for the whole pickup), both grippers open, move to `1.txt`
 2. `2.txt`
 3. `3.txt`, then the right gripper to `--scrape-grip` (0.5)
-4. right gripper closed, then `4.txt` (move away)
+4. right gripper closed over `--gripper-close-seconds` (0.5 s), then `4.txt` (move away)
 
 Each pose takes `--phase-seconds` (8 s) with `--between-delay` (1 s) between them. Joints past the URDF limits are clamped with a warning.
 

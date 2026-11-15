@@ -34,6 +34,7 @@ from swiss_robot_bridge.panther_topics import (
     LIFT_MIN_M,
     DEFAULT_THROW,
     LEFT_ARM_JOINTS,
+    PICKUP_CLOSE_S,
     PICKUP_DIR,
     PICKUP_PAUSE_S,
     PICKUP_PHASE_S,
@@ -206,6 +207,11 @@ def pickup_points() -> list[tuple[float, tuple[float, ...], float | None]]:
     for i, q in enumerate(PICKUP_POSES):
         if i:
             prev = PICKUP_POSES[i - 1]
+            if i == 3:  # ramp the close (0.1 s steps) while pose 3 holds, so it is gentle
+                n = max(1, round(PICKUP_CLOSE_S / 0.1))
+                for k in range(1, n):
+                    g = PICKUP_SCRAPE_GRIP + (GRIPPER_CLOSED_POS - PICKUP_SCRAPE_GRIP) * k / n
+                    pts.append((round(t + PICKUP_PAUSE_S - PICKUP_CLOSE_S * (n - k) / n, 4), prev + (0.0, g, lift), None))
             t += PICKUP_PAUSE_S
             pts.append((round(t, 4), prev + hold[i], None))
             t += max(PICKUP_PHASE_S, max(abs(a - b) for a, b in zip(q, prev)) / (MAX_ARM_JOINT_VEL_RPS * 0.9))
