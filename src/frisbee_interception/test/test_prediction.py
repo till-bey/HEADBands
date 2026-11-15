@@ -123,3 +123,16 @@ def test_image_mode_requires_catch_size_calibration():
     hist, _, _ = _approach()
     pred = InterceptPredictor(PredictorConfig(catch_diameter_px=0)).predict_image(hist)
     assert not pred.valid and "calibrated" in pred.reason
+
+
+def test_prediction_from_a_coasting_track_expires():
+    """The same (old) history evaluated later must not stay valid with a stale time to intercept."""
+    hist, _, _ = _approach(noise=0.5)
+    p = InterceptPredictor(PredictorConfig(catch_diameter_px=K.fx * D / 1.0))
+    pred = p.at_time(p.predict_image(hist, None, (K.cx, K.cy)), hist[-1].t)
+    assert pred.valid
+    tti = pred.time_to_intercept
+    later = p.at_time(p.predict_image(hist, None, (K.cx, K.cy)), hist[-1].t + 0.05)
+    assert later.time_to_intercept == pytest.approx(tti - 0.05)
+    stale = p.at_time(p.predict_image(hist, None, (K.cx, K.cy)), hist[-1].t + 0.2)
+    assert not stale.valid and "old" in stale.reason

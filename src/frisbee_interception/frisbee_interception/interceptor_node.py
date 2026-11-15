@@ -209,6 +209,8 @@ class InterceptorNode(Node):
             pred = self.predictor.predict_image(hist, self.homography, pp)
             if pred.valid and pred.point is not None:
                 pred.point = self._plane_coords_to_target(pred.point)
+        # Re-time to this message (a coasting track repeats old measurements: never re-send an old crossing).
+        pred = self.predictor.at_time(pred, Time.from_msg(msg.header.stamp).nanoseconds * 1e-9)
         self.last_pred = pred
         self._publish(msg, pred)
 

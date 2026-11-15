@@ -7,10 +7,12 @@ frisbee_detector:
     publish_debug: true             # /frisbee/debug/detections, drawn only while someone subscribes
     max_debug_width: 640
     detection:
-      # motion: three-frame differencing with shake compensation (default, no color assumption)
-      # background: MOG2 background model (best for a fixed camera)
-      # hsv / motion_and_hsv / background_and_hsv: optional color gate, set hsv_lower/upper for your disc
-      method: motion
+      # background: MOG2 background model (default; the camera must not move: tripod or robot mount)
+      # motion: three-frame differencing with shake compensation (hand-held camera, sideways throws)
+      # hsv / motion_and_hsv / background_and_hsv: add a color gate (hsv_lower/upper). For a WHITE disc,
+      #   background_and_hsv with the range below removed false tracks on heads in the 2026-11-15 clips
+      #   (but warm-lit hands and white shoes still pass)
+      method: background
       processing_width: 360         # detection runs at this width; coordinates are reported at full resolution
       blur_kernel: 5
       motion_threshold: 25
@@ -18,8 +20,8 @@ frisbee_detector:
       bg_history: 90
       bg_var_threshold: 32.0
       bg_warmup_frames: 5
-      hsv_lower: [0, 0, 170]        # example: bright, low-saturation disc; change for a colored disc
-      hsv_upper: [180, 70, 255]
+      hsv_lower: [0, 0, 160]        # white disc under warm indoor light (measured: S ~40, V ~230)
+      hsv_upper: [180, 90, 255]     # change for a colored disc
       open_kernel: 3
       close_kernel: 7
       min_area_px: 30.0             # processing pixels
@@ -38,7 +40,8 @@ frisbee_tracker:
       min_hits: 3
       min_motion_px_s: 15.0         # must move or grow this fast to be confirmed (head-on throws barely move)
       max_coast_s: 0.25
-      max_tracks: 4
+      max_tracks: 8                 # crowded scenes: moving people must not use up every slot
+      primary_switch_ratio: 1.5     # primary = fastest confirmed track; switch when another is 1.5x faster
       gate_base_px: 40.0
       gate_sigma: 4.0
       max_size_ratio: 1.8
@@ -87,6 +90,7 @@ frisbee_interceptor:
       max_position_sigma_m: 0.25
       max_pixel_sigma: 60.0
       max_time_sigma_s: 0.15
+      max_measurement_age_s: 0.1    # a coasting track's old prediction is never re-sent as valid
     safety:
       max_data_age_s: 0.25          # older camera data is never used
       track_timeout_s: 0.5          # publish 'invalid' when tracks stop arriving

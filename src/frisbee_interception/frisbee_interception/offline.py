@@ -67,7 +67,7 @@ def run(video: str, cfg_path: str | None, out: str | None, log_path: str | None,
         p = None
         if trk.primary is not None and trk.state in ("confirmed", "coasting"):
             h, w = frame.shape[:2]
-            p = pred.predict_image(trk.history, None, (w / 2.0, h / 2.0))
+            p = pred.at_time(pred.predict_image(trk.history, None, (w / 2.0, h / 2.0)), t)
             stats["confirmed_frames"] += 1
             if p.valid:
                 stats["valid_predictions"] += 1

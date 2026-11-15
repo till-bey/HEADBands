@@ -11,7 +11,8 @@ Each track goes through:
   CONFIRMED  - publishes velocity and size rate; keeps a short history of measurements;
   COASTING   - no detection for a while: the filter predicts, the history is kept;
   LOST       - no detection for `max_coast_s`: the track is dropped.
-The primary track is the confirmed (or coasting) track with the most hits.
+The primary track is the confirmed (or coasting) track that moves or grows fastest; it switches only to a
+clearly faster one (`primary_switch_ratio`), so walking people or heads do not hide a frisbee in flight.
 """
 
 from __future__ import annotations
@@ -30,7 +31,8 @@ class TrackerConfig:
     min_hits: int = 3  # consistent detections before a track is confirmed
     min_motion_px_s: float = 15.0  # confirmed only if speed or size-rate exceeds this (rejects static objects)
     max_coast_s: float = 0.25  # drop a confirmed track after this long without a detection
-    max_tracks: int = 4
+    max_tracks: int = 8  # crowded scenes: people moving must not use up every slot
+    primary_switch_ratio: float = 1.5  # switch the primary to a track this much faster (px/s)
     gate_base_px: float = 40.0  # association gate radius at zero velocity / uncertainty
     gate_sigma: float = 4.0  # plus this many predicted standard deviations
     max_size_ratio: float = 1.8  # reject a detection whose diameter jumps by more than this factor
@@ -128,17 +130,20 @@ class Track:
             return None
         return dist / gate
 
-    def moving(self) -> bool:
-        """Has the track moved or grown enough to be a frisbee in flight (measured, not filtered)?"""
+    def motion_rate(self, n: int = 5) -> float:
+        """Image speed or size rate (px/s, whichever is larger) over the last n measurements."""
         if len(self.history) < 2:
-            return False
-        a, b = self.history[0], self.history[-1]
+            return 0.0
+        h = list(self.history)[-n:]
+        a, b = h[0], h[-1]
         dt = b.t - a.t
         if dt <= 0:
-            return False
-        speed = math.hypot(b.u - a.u, b.v - a.v) / dt
-        growth = abs(b.d - a.d) / dt
-        return max(speed, growth) >= self.cfg.min_motion_px_s
+            return 0.0
+        return max(math.hypot(b.u - a.u, b.v - a.v), abs(b.d - a.d)) / dt
+
+    def moving(self) -> bool:
+        """Has the track moved or grown enough to be a frisbee in flight (measured, not filtered)?"""
+        return self.motion_rate(n=len(self.history)) >= self.cfg.min_motion_px_s
 
     def update(self, z: Measurement) -> None:
         self.kf.update(z)
@@ -228,9 +233,18 @@ class FrisbeeTracker:
                 break
             self.tracks.append(Track(d, self.cfg))
 
+        # Primary = the confirmed track that moves or grows fastest (a frisbee in flight is much faster than
+        # walking people or heads). Switch only to a clearly faster track, so the primary does not flap.
         confirmed = [tr for tr in self.tracks if tr.state in (CONFIRMED, COASTING)]
-        if self._primary not in confirmed:
-            self._primary = max(confirmed, key=lambda tr: tr.hits) if confirmed else None
+        if not confirmed:
+            self._primary = None
+        else:
+            fastest = max(confirmed, key=lambda tr: tr.motion_rate())
+            if self._primary not in confirmed or (
+                fastest is not self._primary
+                and fastest.motion_rate() > self.cfg.primary_switch_ratio * self._primary.motion_rate()
+            ):
+                self._primary = fastest
         return self.state
 
     # ----------------------------------------------------------------- outputs

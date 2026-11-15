@@ -42,6 +42,7 @@ class PredictorConfig:
     max_position_sigma_m: float = 0.25
     max_pixel_sigma: float = 60.0
     max_time_sigma_s: float = 0.15
+    max_measurement_age_s: float = 0.1  # predictions from older data (coasting track) are not valid
     catch_diameter_px: float = 0.0  # image mode: apparent diameter at the catching plane (calibrated); 0 = unset
 
     @classmethod
@@ -235,6 +236,22 @@ class InterceptPredictor:
             diagnostics=diag,
         )
         return self._finalize(pred, len(t), w)
+
+    def at_time(self, pred: Prediction, t_now: float) -> Prediction:
+        """Express a prediction relative to t_now (e.g. while the track coasts on old measurements).
+
+        time_to_intercept becomes intercept_time - t_now; a crossing that is already (nearly) over, or a
+        prediction built on measurements older than `max_measurement_age_s`, is no longer valid.
+        """
+        if not pred.valid or math.isnan(pred.intercept_time):
+            return pred
+        age = t_now - pred.t_ref
+        pred.time_to_intercept = pred.intercept_time - t_now
+        if age > self.cfg.max_measurement_age_s:
+            pred.valid, pred.reason = False, f"newest measurement {age:.2f} s old (track coasting)"
+        elif pred.time_to_intercept < self.cfg.min_time_to_intercept_s:
+            pred.valid, pred.reason = False, f"interception in {pred.time_to_intercept:.2f} s is outside the allowed window"
+        return pred
 
     # ------------------------------------------------------------------ shared checks
     def _finalize(self, pred: Prediction, n: int, w: np.ndarray) -> Prediction:

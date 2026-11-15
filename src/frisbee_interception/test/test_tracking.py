@@ -65,6 +65,24 @@ def test_clutter_does_not_hijack_a_confirmed_track():
     assert tr.state == CONFIRMED and est["u"] > 300 and est["v"] < 400
 
 
+def test_fast_disc_takes_primary_from_a_slow_walker():
+    """A slowly moving person/head is confirmed first; a frisbee appearing later must become primary."""
+    tr = FrisbeeTracker(TrackerConfig())
+    t = 0.0
+    for _ in range(30):  # walker: 40 px/s, confirmed long before the throw
+        t += 1 / 30
+        tr.step(t, [Measurement(t, 100 + 40 * t, 900, 60, 0.9)])
+    assert tr.state == CONFIRMED and tr.estimate()["u"] < 200
+    t0 = t
+    for _ in range(6):  # disc: 600 px/s and growing, while the walker keeps being detected
+        t += 1 / 30
+        walker = Measurement(t, 100 + 40 * t, 900, 60, 0.9)
+        disc = Measurement(t, 600 - 600 * (t - t0), 300, 30 + 200 * (t - t0), 0.8)
+        tr.step(t, [walker, disc])
+    est = tr.estimate()
+    assert est["v"] < 500 and est["du"] < -300  # the primary is the disc
+
+
 def test_coasts_through_a_short_gap_and_drops_after_timeout():
     cfg = TrackerConfig(max_coast_s=0.2)
     tr = FrisbeeTracker(cfg)

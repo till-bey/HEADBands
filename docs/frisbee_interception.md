@@ -45,21 +45,24 @@ CPU only: Python + OpenCV + NumPy. No neural networks, no GPU, no training.
 **Detector** (`core/detection.py`, `frisbee_detector`)
 - Runs at `processing_width` (360 px) and reports full-resolution coordinates. ~13 ms/frame at 720×1280 on one laptop core.
 - Foreground mask, chosen with `detection.method`:
-  - `background` — MOG2 background subtraction. **Use this with a fixed camera** (the interception set-up). A disc
-    flying straight at the camera barely moves in the image, and only a background model sees it reliably.
+  - `background` (**default**) — MOG2 background subtraction. Needs a fixed camera (the interception set-up). A
+    disc flying straight at the camera barely moves in the image, and only a background model sees it reliably.
   - `motion` — three-frame differencing with phase-correlation shake compensation. For a hand-held camera and
-    sideways throws (the existing recordings). It misses head-on throws (see §8).
+    sideways throws (the 2026-11-14 recordings). It misses head-on throws (see §8).
   - `hsv`, `motion_and_hsv`, `background_and_hsv` — optional color gate (`hsv_lower/upper`). Off by default: no
-    color is assumed.
+    color is assumed. The YAML range is the measured white disc of the 2026-11-15 clips, and
+    `background_and_hsv` with it removed the false tracks on heads there (§8.1).
 - Each blob gets an ellipse fit, then geometric filters: area, axis length, aspect (minor/major ≥ 0.06: an edge-on
   disc is thin), solidity, ellipse fill. Confidence comes from solidity, fill and aspect.
 - Output per detection: center, bbox, ellipse (major/minor/angle), confidence. Apparent diameter = **major axis**
   (tilt shrinks only the minor axis).
 
 **Tracker** (`core/tracking.py`, `frisbee_tracker`)
-- Up to 4 constant-velocity Kalman tracks on (u, v, d) with image velocity and size rate, using the **message
+- Up to 8 constant-velocity Kalman tracks on (u, v, d) with image velocity and size rate, using the **message
   timestamps** (not arrival time).
 - Gating on distance (gate grows with uncertainty) and size ratio. Associations prefer confirmed tracks.
+- The primary track (the one predictions use) is the confirmed track that moves or grows fastest. It switches only
+  to a track 1.5× faster, so walking people never hide a disc in flight.
 - A track is confirmed after `min_hits` (3) hits **and** if it moves or grows faster than `min_motion_px_s`, which
   rejects isolated false detections and static distractors. It coasts for `max_coast_s` and is then LOST. Time
   going backwards resets it.
@@ -239,7 +242,7 @@ hand, short corrections, and higher joint speeds, and those must be validated on
 
 | Input | Result |
 |---|---|
-| Unit tests (18) | pass with OpenCV 4.5.4 (Ubuntu 22.04 / Humble) and 4.14 |
+| Unit tests (20) | pass with OpenCV 4.5.4 (Ubuntu 22.04 / Humble) and 4.14 |
 | Synthetic throws, 9 m → camera at 9 m/s, `background`, 3 noise seeds | first valid prediction **0.45–0.65 s** before contact. Crossing-time error stays under **40% of the time still to go** (≈ 0.1–0.2 s half a second out, a few tens of ms near contact). Pixel error ≤ 50 px early and **≤ 20 px in the last 0.3 s** (≤ 4.5 cm at 1 m) |
 | Full ROS launch, image mode (Cloud Build CI, looped synthetic throw, 20 s) | 55 valid predictions. Pixel error ≤ 17 px in the last 0.3 s; the first prediction of each throw (~0.5 s out) is 48–64 px off. Arming refused (no workspace), **0 catch targets** |
 | Full ROS launch, metric mode (intrinsics + static TF + plane) | catch point error **9–37 mm**. Armed: 16 catch targets; after `/frisbee/disable`: **0**. Far predictions correctly rejected for position uncertainty > 0.25 m |
@@ -250,8 +253,44 @@ bends the 1/d-vs-time line while the disc is still small. For that reason a pred
 has shrunk by ≥ 30% within the fit window (`prediction.min_size_growth: 0.3`). Lowering it gives earlier but less
 accurate predictions.
 
-To validate on real data, record throws **toward a fixed, tripod-mounted phone** from 6–10 m (1080p 60 fps if
-possible). Measure `catch_diameter_px` at the catching distance, and use `detection.method: background`.
+### 8.1 Fixed-camera recordings (2026-11-15, three WhatsApp clips, 30 fps, 480×864 / 848×480)
+
+The phone was static (on the floor or a table) and people threw from about 3–5 m. Six throws were identified:
+
+| Clip / frames | Throw | Disc visible on its own | Result (`background_and_hsv`, white) |
+|---|---|---|---|
+| WA0000 367–372 | toward the camera | ~5 frames (0.17 s) | tracked; valid from **0.075 s** before arrival (frames 368–371) |
+| WA0000 709–714 | toward the camera | ~5 frames | tracked; valid from **0.056 s** before |
+| WA0000 1093–1097 | low, past the right edge | ~3 frames | tracked; valid **0.02 s** before |
+| WA0000 1463–1474 | down-left, in front of the thrower | ~10 frames, mostly overlapping the body | not separated from the thrower → no prediction |
+| WA0001 376–381 | sideways, leaves the frame | ~5 frames, attached to the arm until 381 | no prediction (correct) |
+| WA0002 302–307 | toward the camera from ~3 m | 3 frames (0.1 s) | too few points → no prediction |
+
+**Conclusion:** detection and tracking work on these clips. But at 3–5 m and 30 fps the disc is in the air for only
+0.1–0.17 s, and the first valid prediction comes 0.02–0.075 s before arrival. That is far too late for any arm, and
+no algorithm can predict from 2–3 frames. Errors seen and what was changed:
+
+- **Walking people / heads** grow in the image like an approaching disc (and are about as big). With `background` a
+  head produced a valid prediction. Fix: the white color gate (`background_and_hsv`, measured range in the YAML)
+  removed it.
+- **Warm-lit hands and white shoes** still pass the white gate. A hand reaching for the phone, and a track that jumped
+  between white shoes and the disc held in the hand, gave 2 false valid predictions. This is why arming, the
+  workspace box and the confidence threshold matter. Real use needs a disc color that is rare in the scene.
+- **Primary track:** it was the oldest confirmed track (often a head), so the disc was ignored. Fixed: the primary is
+  now the fastest-moving confirmed track (hysteresis 1.5×), and 8 track slots are available.
+- **Coasting track:** while the track coasted, the last prediction was re-published with an outdated time to
+  intercept. Fixed: predictions are re-timed to the current frame and expire after 0.1 s without new measurements
+  (`prediction.max_measurement_age_s`). The ROS interceptor uses the same code.
+
+### 8.2 What a useful recording looks like
+
+- Camera **fixed** (tripod, or the robot's own mount), at the catching position.
+- Thrower **8–15 m** away, throwing **at** the camera, with the disc visible from the release on (not in front of the
+  body or the background crowd).
+- **60 fps or more** (most phones: 1080p60 or 720p120). This doubles to quadruples the frames per throw.
+- A disc color that is rare in the scene. Here the floor is orange and the light is warm, so bright green or pink
+  would beat white. Then use `background_and_hsv` with that color's range.
+- Hold the disc face-on at the catching distance for a few seconds at the start, to read `catch_diameter_px`.
 
 ---
 
