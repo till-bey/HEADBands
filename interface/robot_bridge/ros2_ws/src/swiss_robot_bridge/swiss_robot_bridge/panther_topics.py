@@ -146,7 +146,7 @@ THROW_PAUSE_S = 1.0  # held at the first row before and after the gripper's firs
 PICKUP_DIR = Path(__file__).resolve().parents[6] / "motion" / "pickup" / "key_points"
 PICKUP_PHASE_S = 8.0  # per key pose, at least (slower if a joint would pass 0.9 x MAX_ARM_JOINT_VEL_RPS)
 PICKUP_PAUSE_S = 1.0  # held between key poses
-PICKUP_START_LIFT_M = 0.2  # lift for the first pose; lowered to 0.0 once it is reached
+PICKUP_LIFT_M = 0.2  # lift height for the whole pickup
 PICKUP_SCRAPE_GRIP = 0.5  # right gripper after the scrape (pose 3); closed when the move away (pose 4) starts
 
 PANTHER_COMMAND_TOPICS: tuple[str, ...] = (
