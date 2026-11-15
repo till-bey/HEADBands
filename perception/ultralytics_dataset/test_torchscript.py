@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import cv2
@@ -11,9 +12,15 @@ from ultralytics import YOLO
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_MODEL = SCRIPT_DIR / "exp.pt"
+DEFAULT_MODEL = SCRIPT_DIR / "exp-mix.pt"
 DEFAULT_VIDEO = SCRIPT_DIR / "test.mp4"
 DEFAULT_OUTPUT = SCRIPT_DIR / "test_annotated.mp4"
+
+
+def predict_timed(model, frame, confidence: float, device: str | None):
+	started = time.perf_counter()
+	result = model.predict(frame, conf=confidence, device=device, verbose=False)[0]
+	return result, (time.perf_counter() - started) * 1000.0
 
 
 def run(model_path: Path, video_path: Path, output_path: Path, confidence: float, device: str | None) -> None:
@@ -46,16 +53,19 @@ def run(model_path: Path, video_path: Path, output_path: Path, confidence: float
 	print(f"Input: {video_path} ({width}x{height}, {fps:.2f} FPS, {frame_count} frames)")
 	print(f"Output: {output_path}")
 	processed = 0
+	total_inference_ms = 0.0
 	try:
 		while True:
 			ok, frame = capture.read()
 			if not ok:
 				break
-			result = model.predict(frame, conf=confidence, device=device, verbose=False)[0]
+			result, inference_ms = predict_timed(model, frame, confidence, device)
 			writer.write(result.plot())
 			processed += 1
+			total_inference_ms += inference_ms
 			if processed % 25 == 0:
-				print(f"Processed {processed}/{frame_count or '?'} frames", end="\r")
+				average_ms = total_inference_ms / processed
+				print(f"Processed {processed}/{frame_count or '?'} | inference: {inference_ms:.2f} ms | average: {average_ms:.2f} ms", end="\r")
 	finally:
 		capture.release()
 		writer.release()
@@ -73,15 +83,21 @@ def run_camera(model_path: Path, camera_index: int, confidence: float, device: s
 
 	print(f"Model: {model_path}")
 	print(f"Webcam: {camera_index}. Press q or Esc to quit.")
+	processed = 0
+	total_inference_ms = 0.0
 	try:
 		while True:
 			ok, frame = capture.read()
 			if not ok:
 				print("Could not read a webcam frame.")
 				break
-			result = model.predict(frame, conf=confidence, device=device, verbose=False)[0]
+			result, inference_ms = predict_timed(model, frame, confidence, device)
 			annotated = result.plot()
 			cv2.imshow("TorchScript webcam inference", annotated)
+			processed += 1
+			total_inference_ms += inference_ms
+			if processed % 10 == 0:
+				print(f"Frames: {processed} | inference: {inference_ms:.2f} ms | average: {total_inference_ms / processed:.2f} ms", flush=True)
 			key = cv2.waitKey(1) & 0xFF
 			if key in (ord("q"), 27):
 				break

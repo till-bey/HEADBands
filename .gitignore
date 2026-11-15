@@ -15,6 +15,6 @@ curated/
 
 # generated
 __pycache__/
-*.pyc
+*.py[cod]
 .ipynb_checkpoints/
 *_annotated.mp4
