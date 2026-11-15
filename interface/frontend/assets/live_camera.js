@@ -1,10 +1,9 @@
 /* Live Panther camera feed for the Web UI.
  *
  * Repeatedly calls POST /api/v1/robotics/camera/capture (the same on-demand path as
- * "Trigger Robot Camera"): the backend asks the ROS 2 bridge, which answers from its buffered
- * /camera/color/image_raw frame. One request at a time, so a slow link never queues frames.
- * Starting the feed may auto-launch the Orbbec driver on the robot (bridge camera_manager);
- * the bridge shuts it down again after its idle timeout once the feed stops.
+ * "Trigger Robot Camera"): the backend asks the ROS 2 bridge, which answers with the latest frame
+ * from the frisbee navigation camera (the same connection as the Frisbee navigation page).
+ * One request at a time, so a slow link never queues frames. Connect the camera on that page first.
  */
 (() => {
   const img = document.getElementById("cameraFeed");
@@ -81,5 +80,5 @@
 
   toggle.addEventListener("click", () => setRunning(!running));
   setRunning(false);
-  setStatus("Press Start to stream /camera/color/image_raw from the robot.");
+  setStatus("Press Start to stream the navigation camera (connect it on the Frisbee navigation page).");
 })();

@@ -89,3 +89,21 @@ def test_bridge_refuses_requests_outside_the_dashboard() -> None:
     assert nav.forward("GET", "/", None)["status"] == 404
     assert nav.forward("DELETE", "/settings", None)["status"] == 404
     assert nav.forward("POST", "/settings", "x" * 9000)["status"] == 413
+
+
+def test_web_ui_camera_is_the_navigation_camera_frame() -> None:
+    import time
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    nav = _navigation()
+    nav._server = SimpleNamespace(camera_frame=None)
+    assert nav.camera_frame() is None  # navigation camera not connected
+    bgr = np.zeros((48, 64, 3), dtype=np.uint8)
+    bgr[:, :, 2] = 255  # red in OpenCV's BGR order
+    nav._server.camera_frame = (bgr, time.monotonic())
+    frame = nav.camera_frame()
+    assert (frame.source, frame.width, frame.height) == ("navigation_camera", 64, 48)  # JPEG, or PNG without cv2/PIL
+    nav._server.camera_frame = (bgr, time.monotonic() - 5.0)
+    assert nav.camera_frame() is None  # a stale frame is never shown as live

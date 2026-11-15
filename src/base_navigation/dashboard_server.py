@@ -21,6 +21,7 @@ class DashboardServer:
     def __init__(self, port=8765, *, settings=None, robot_control=None):
         self.robot_control = robot_control if robot_control is not None else WebRobotControl()
         self._jpeg = None
+        self.camera_frame = None  # latest upright camera frame, set by run_dashboard
         self._lock = Lock()
         self._settings = {name: getattr(settings, name) for name in SETTINGS_FIELDS} if settings else {}
         self._applied_settings = self._settings.copy()

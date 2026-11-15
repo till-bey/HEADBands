@@ -118,6 +118,22 @@ class NavigationMode:
             return (0.0, 0.0, 0.0)  # releases the base; idle ticks leave manual jogs alone
         return None
 
+    def camera_frame(self, max_age_s: float = 2.0):
+        """The navigation camera's latest upright frame as a Web UI camera snapshot, or None when stale."""
+        from datetime import datetime, timezone
+
+        from swiss_robot_bridge.camera_manager import CapturedCameraFrame, encode_rgb_frame
+
+        latest = self._server.camera_frame
+        if latest is None or time.monotonic() - latest[1] > max_age_s:
+            return None
+        frame, at = latest
+        data, mime, width, height = encode_rgb_frame(frame[:, :, ::-1])  # OpenCV frames are BGR
+        return CapturedCameraFrame(
+            image_bytes=data, mime_type=mime, width=width, height=height, source="navigation_camera",
+            captured_monotonic=at, captured_at_utc=datetime.now(tz=timezone.utc).isoformat(),
+        )
+
     def stop(self, reason: str) -> None:
         self.control.stop(reason)
         self.set_twist(0.0, 0.0)

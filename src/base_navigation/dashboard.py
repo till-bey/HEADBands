@@ -132,6 +132,7 @@ def run_dashboard(display, args, *, robot_control=None):
                     camera.close()
                     camera = None
                 last_frame = blank.copy()
+                display.camera_frame = None
                 status = "Camera disconnected"
                 if action == "connect":
                     args = settings
@@ -152,6 +153,8 @@ def run_dashboard(display, args, *, robot_control=None):
                     # The dashboard camera is mounted upside down. Correct the
                     # image before detection so targeting matches the preview.
                     last_frame = cv2.rotate(camera.read_frame(timeout=0.2), cv2.ROTATE_180)
+                    # The robot bridge's Web UI camera shares this connection: (BGR frame, monotonic time).
+                    display.camera_frame = (last_frame, time.monotonic())
                     center, position, command, status = inspect_frame(
                         camera, last_frame, args, controller, feedback=feedback)
                     if time.monotonic() - started_at > args.target_timeout:

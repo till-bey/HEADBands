@@ -197,7 +197,7 @@
             `data:${mime};base64,${a.camera_frame.jpeg_base64}`,
             a.detected_objects || []
           );
-          er2Output.innerHTML = `<strong>Auto-Triggered Camera (${a.camera_frame.source || "/camera/color/image_raw"}):</strong> ${a.scene_summary || "Workspace analyzed by Gemini Robotics ER 2."}`;
+          er2Output.innerHTML = `<strong>Auto-Triggered Camera (${a.camera_frame.source || "navigation camera"}):</strong> ${a.scene_summary || "Workspace analyzed by Gemini Robotics ER 2."}`;
         }
         if ((a.robot_commands && a.robot_commands.length > 0) || (a.tool_calls && a.tool_calls.length > 0)) {
           refreshRobotStatus();
@@ -371,7 +371,7 @@
     if (pantherTelemetryBar) {
       const linkTxt = statusObj.bridge_connected ? "Connected" : "Standby (No Live Bridge)";
       const camTxt = statusObj.camera_ready
-        ? `Ready (${statusObj.camera_source || "/camera/color/image_raw"})`
+        ? `Ready (${statusObj.camera_source || "navigation camera"})`
         : "On-Demand Idle";
       const extras = [];
       if (statusObj.lift_height_m !== null && statusObj.lift_height_m !== undefined) {
@@ -631,7 +631,7 @@
 
   if (captureCameraBtn) {
     captureCameraBtn.addEventListener("click", async () => {
-      er2Output.textContent = "Triggering Panther ROS 2 camera (/camera/color/image_raw)...";
+      er2Output.textContent = "Reading the navigation camera...";
       try {
         const res = await fetch("/api/v1/robotics/camera/capture", {
           method: "POST",
@@ -663,7 +663,7 @@
     const hasFile = Boolean(er2ImageInput.files && er2ImageInput.files[0]);
     er2Output.textContent = hasFile
       ? "Running Gemini Robotics ER 2 spatial analysis..."
-      : "Triggering Panther camera (/camera/color/image_raw) & running Gemini Robotics ER 2...";
+      : "Reading the navigation camera & running Gemini Robotics ER 2...";
     const fd = new FormData();
     fd.append("instruction", er2Instruction.value);
     if (hasFile) {

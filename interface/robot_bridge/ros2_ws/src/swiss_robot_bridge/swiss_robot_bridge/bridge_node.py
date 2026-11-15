@@ -765,11 +765,8 @@ async def run_bridge_loop() -> None:
                     supervisor.record_cloud_heartbeat(time.monotonic())
 
                     async def _capture_and_upload_camera(request_id: str) -> None:
-                        frame = await camera_mgr.capture_frame_on_demand(
-                            activate_ros_camera_cb=ros_hw.activate_camera_subscriptions,
-                            spin_ros_once_cb=ros_hw.spin_once,
-                            ros_color_publisher_count_cb=ros_hw.count_color_camera_publishers,
-                        )
+                        # The Web UI camera is the frisbee navigation camera (one shared connection), not ROS.
+                        frame = await asyncio.to_thread(navigation.camera_frame) if navigation is not None else None
                         if frame is not None:
                             await ws.send(json.dumps(frame.to_ws_payload(request_id=request_id)))
                         else:
@@ -778,7 +775,7 @@ async def run_bridge_loop() -> None:
                                     {
                                         "type": "camera_frame_error",
                                         "request_id": request_id,
-                                        "error": "No camera frame available from /camera/color/image_raw or fallback.",
+                                        "error": "No frame from the navigation camera; connect it on the Frisbee navigation page.",
                                     }
                                 )
                             )
@@ -790,13 +787,7 @@ async def run_bridge_loop() -> None:
                                 if supervisor.local_estop_latched
                                 else ("busy" if supervisor.active_command_id else "ready")
                             )
-                            cam_ready = (
-                                camera_mgr.has_fresh_frame(max_age_seconds=10.0)
-                                or ros_hw.count_color_camera_publishers() > 0
-                                or bool(camera_mgr.camera_launch_cmd)
-                                or bool(camera_mgr.snapshot_url)
-                                or camera_mgr.allow_sim_fallback
-                            )
+                            cam_ready = navigation is not None and navigation.camera_frame(10.0) is not None
                             await ws.send(
                                 json.dumps(
                                     {
@@ -811,7 +802,7 @@ async def run_bridge_loop() -> None:
                                             "ros_domain_id": ros_domain_id,
                                             "camera_ready": cam_ready,
                                             "camera_driver_active": camera_mgr.driver_active,
-                                            "camera_source": camera_mgr.latest_source,
+                                            "camera_source": "navigation_camera" if cam_ready else None,
                                             "front_obstacle_distance_m": supervisor.front_obstacle_distance_m,
                                             "lift_height_m": ros_hw.lift_height_m,
                                             "left_gripper_pos": ros_hw.left_gripper_pos,
