@@ -41,6 +41,16 @@ from panther_examples.robot import FORWARD, LEFT_GRIPPER_CMD_TOPIC, LEFT_TRAJ, M
 BASE = "body_link"
 
 
+class PlanningError(RuntimeError):
+    """Planning failed after a reachable prefix of waypoints."""
+
+    def __init__(self, message, waypoint=-1, partial_qs=None, partial_ts=None):
+        super().__init__(message)
+        self.waypoint = waypoint
+        self.partial_qs = partial_qs
+        self.partial_ts = partial_ts
+
+
 def jnt(values):
     a = kdl.JntArray(len(values))
     for i, v in enumerate(values):
@@ -107,25 +117,27 @@ def plan(chain, poses, ts, q_now, max_vel, hint=None):
     if hint is not None and (q := chain.ik(poses[0], hint)) is not None:
         firsts.insert(0, q)
     if not firsts:
-        raise RuntimeError("waypoint 0 is out of reach within the joint limits")
+        raise PlanningError("waypoint 0 is out of reach within the joint limits", 0)
     # The arm is redundant: the first waypoint has several solutions and the rest of the path may
     # only work from some. Try them nearest-first; report the attempt that got furthest.
-    best = (-1, None)
+    best = (-1, None, None)
     for q in firsts:
         qs = [q]
         for i, pose in enumerate(poses[1:], 1):  # later waypoints: seed from the previous one
             q = chain.ik(pose, q)
             if q is None:
                 if i > best[0]:
-                    best = (i, f"waypoint {i} (t={ts[i]:.2f}s) is out of reach within the joint limits")
+                    best = (i, f"waypoint {i} (t={ts[i]:.2f}s) is out of reach within the joint limits", qs)
                 break
             qs.append(q)
         else:
             try:
                 return timed(chain, qs, ts, q_now, max_vel)
             except RuntimeError as e:
-                best = (len(poses), str(e))
-    raise RuntimeError(best[1])
+                best = (len(poses), str(e), qs)
+    partial_qs = None if best[2] is None else np.asarray(best[2])
+    partial_ts = None if partial_qs is None else np.asarray(ts[:len(partial_qs)])
+    raise PlanningError(best[1], best[0], partial_qs, partial_ts)
 
 
 def timed(chain, qs, ts, q_now, max_vel):

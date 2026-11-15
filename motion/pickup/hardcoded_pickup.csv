@@ -1,0 +1,8 @@
+# Hardcoded right-arm pickup example in body_link.
+# Target XY: (0.25, 0.00) m. Floor clearance: 0.05 m.
+# body_link floor z at body-height 0.0: approximately -0.563 m.
+# Pickup z is -0.513 m. Adjust the first row to the actual hand start if needed.
+# t,x,y,z,roll,pitch,yaw
+0.00,0.559,-0.218,-0.299,-0.926,0.006,2.496
+2.00,0.45,0.0,-0.299,-0.926,0.006,2.496
+6.00,0.45,0.0,-0.299,0.0,0.0,3.14159
