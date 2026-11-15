@@ -12,12 +12,27 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Range
+from std_msgs.msg import Float64MultiArray
+
+if __package__:
+    from .ultrasound import UltrasoundReadings
+else:
+    from ultrasound import UltrasoundReadings
 
 LIFT_MIN_M = 0.0
 LIFT_MAX_M = 0.6  # Local interface reference recommends this over the conflicting SDK 0.8 m.
 LIFT_FEEDBACK_TIMEOUT_NS = int(1e9)
+HEAD_MIN_RAD = -0.26  # ~15 degrees up, inside the URDF's -0.348 limit.
+HEAD_MAX_RAD = 1.41  # ~81 degrees down, inside the URDF's 1.5 limit.
+HEAD_STEP_RAD = math.radians(5)
+HEAD_SPEED_RAD_S = 0.2
+# Actual robot behavior reported during dashboard testing: command slot 0 turns
+# left/right; slot 1 tilts up/down. This overrides the reference's pitch/yaw labels.
+HEAD_PITCH_INDEX = 1
+HEAD_YAW_INDEX = 0
 
 
 class BaseController(Node):
@@ -40,6 +55,16 @@ class BaseController(Node):
         self._lift_deadline = None
         self._lift_subscription = self.create_subscription(
             JointState, "/lifting_controller/joint_states", self._on_lift_state, 10)
+        self.head_publisher = self.create_publisher(
+            Float64MultiArray, "/head_forward_position_controller/commands", 1)
+        self._head_positions = self._head_feedback_at = None
+        self._head_target = self._head_command = self._head_tick_at = None
+        self._head_deadline = None
+        self._head_subscription = self.create_subscription(
+            JointState, "/joint_states", self._on_head_state, 10)
+        self._ultrasound = UltrasoundReadings()
+        self._ultrasound_subscriptions = {}
+        self._ultrasound_discovery = self.create_timer(1.0, self._discover_ultrasound, clock=self._clock)
         self._timer = self.create_timer(0.05, self._tick, clock=self._clock)
 
     def move_base(self, linear_speed=0.0, angular_speed=0.0, duration=1.0):
@@ -66,6 +91,7 @@ class BaseController(Node):
 
     def _tick(self):
         """Called at 20 Hz while the executor spins."""
+        self._tick_head()
         if self._lift_target is not None:
             state = self.lift_status
             if (not state["fresh"] or not state["connected"]
@@ -86,6 +112,18 @@ class BaseController(Node):
         self._command = Twist()
         if rclpy.ok():
             self.publisher.publish(self._command)
+
+    def _discover_ultrasound(self):
+        # Range.radiation_type distinguishes ultrasound from infrared sensors.
+        for topic, types in self.get_topic_names_and_types():
+            if 'sensor_msgs/msg/Range' in types and topic not in self._ultrasound_subscriptions:
+                self._ultrasound_subscriptions[topic] = self.create_subscription(
+                    Range, topic, lambda message, name=topic: self._ultrasound.update(name, message),
+                    qos_profile_sensor_data)
+
+    @property
+    def ultrasound_status(self):
+        return self._ultrasound.snapshot()
 
     def _on_lift_state(self, message):
         """Accept the documented body_joint feedback, including explicit invalid states."""
@@ -142,6 +180,79 @@ class BaseController(Node):
             message.velocity = [0.0]
             self.lift_publisher.publish(message)
 
+    def _on_head_state(self, message):
+        try:
+            positions = [float(message.position[message.name.index(name)])
+                         for name in ("joint_head0", "joint_head1")]
+        except (ValueError, IndexError):
+            return
+        if not all(math.isfinite(value) for value in positions):
+            self._head_positions = self._head_feedback_at = None
+            self.stop_head()
+            return
+        self._head_positions = positions
+        self._head_feedback_at = self._clock.now().nanoseconds
+
+    @property
+    def head_status(self):
+        fresh = (self._head_feedback_at is not None
+                 and self._clock.now().nanoseconds - self._head_feedback_at <= int(1e9))
+        return {"connected": self.head_publisher.get_subscription_count() > 0,
+                "fresh": fresh,
+                "pitch": self._head_positions[HEAD_PITCH_INDEX] if self._head_positions else None,
+                "yaw": self._head_positions[HEAD_YAW_INDEX] if self._head_positions else None,
+                "moving": self._head_target is not None}
+
+    def move_head(self, delta_rad):
+        if not math.isfinite(delta_rad) or not 0 < abs(delta_rad) <= HEAD_STEP_RAD + 1e-9:
+            raise ValueError("Head step must be nonzero and at most 5 degrees")
+        state = self.head_status
+        if not state["connected"] or not state["fresh"]:
+            raise RuntimeError("Connected head controller and fresh pitch/yaw feedback required")
+        if state["moving"]:
+            raise RuntimeError("Wait for the current head movement to finish")
+        target = state["pitch"] + delta_rad
+        if not HEAD_MIN_RAD <= target <= HEAD_MAX_RAD:
+            raise ValueError("Head pitch must stay between -0.26 and 1.41 rad")
+        self._head_target = target
+        self._head_command = self._head_positions.copy()  # Keep yaw unchanged.
+        self._head_tick_at = self._clock.now().nanoseconds
+        self._head_deadline = self._head_tick_at + int(2e9)
+        return target
+
+    def _publish_head(self, positions):
+        message = Float64MultiArray()
+        message.data = [float(value) for value in positions]
+        self.head_publisher.publish(message)
+
+    def _tick_head(self):
+        if self._head_target is None:
+            return
+        now = self._clock.now().nanoseconds
+        state = self.head_status
+        if not state["connected"] or not state["fresh"] or now >= self._head_deadline:
+            self.stop_head()
+            return
+        if abs(state["pitch"] - self._head_target) <= 0.005:
+            self._head_target = None
+            return
+        # Cap elapsed time so an executor delay cannot produce a large jump.
+        step = HEAD_SPEED_RAD_S * min(0.05, max(0, (now - self._head_tick_at) / 1e9))
+        error = self._head_target - self._head_command[HEAD_PITCH_INDEX]
+        self._head_command[HEAD_PITCH_INDEX] += max(-step, min(step, error))
+        self._head_tick_at = now
+        self._publish_head(self._head_command)
+
+    def stop_head(self):
+        active = self._head_target is not None
+        self._head_target = None
+        if active and rclpy.ok():
+            # Forward position controllers hold their last setpoint. Freeze at
+            # measured pose when fresh, otherwise at the last small setpoint.
+            pose = self._head_positions if self.head_status["fresh"] else self._head_command
+            if pose is not None:
+                self._publish_head(pose)
+
 
 class RobotNavigation:
     """ROS adapter for an application-owned control loop.
@@ -167,6 +278,10 @@ class RobotNavigation:
     def connected(self):
         """Whether ROS is running and a drive subscriber is available."""
         return rclpy.ok() and self._node.publisher.get_subscription_count() > 0
+
+    @property
+    def ultrasound_status(self):
+        return self._node.ultrasound_status
 
     def set_velocity(self, linear_speed=0.0, angular_speed=0.0):
         """Apply m/s and rad/s. Return False if the drive is disconnected."""
@@ -194,6 +309,16 @@ class RobotNavigation:
     def stop_lift(self):
         self._node.stop_lift()
 
+    @property
+    def head_status(self):
+        return self._node.head_status
+
+    def move_head(self, delta_rad):
+        return self._node.move_head(delta_rad)
+
+    def stop_head(self):
+        self._node.stop_head()
+
     def wait(self, seconds=0.05):
         """Process ROS events for one control period, including timed stops."""
         deadline = time.monotonic() + seconds
@@ -208,9 +333,11 @@ class RobotNavigation:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._node._timer.cancel()
+        self._node._ultrasound_discovery.cancel()
         try:
             self._node.stop()
             self._node.stop_lift()
+            self._node.stop_head()
             if rclpy.ok():
                 time.sleep(0.1)
         finally:
@@ -246,6 +373,7 @@ def main(args=None):
         node._timer.cancel()
         node.stop()
         node.stop_lift()
+        node.stop_head()
         if rclpy.ok():
             time.sleep(0.1)  # Brief opportunity for the stop message to transmit.
         node.destroy_node()

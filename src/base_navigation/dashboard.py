@@ -2,7 +2,6 @@
 """Camera dashboard with browser controls for navigation and body height."""
 
 import time
-from copy import copy
 from pathlib import Path
 import sys
 
@@ -15,12 +14,14 @@ import numpy as np
 if __package__:
     from .config import parse_args, create_controller
     from .dashboard_server import DashboardServer
+    from .calibration import camera_pose
 else:
     from config import parse_args, create_controller
     from dashboard_server import DashboardServer
+    from calibration import camera_pose
 
 
-def inspect_frame(camera, frame, args, controller):
+def inspect_frame(camera, frame, args, controller, *, feedback=None):
     """Detect once, projecting the same center that is drawn on the image."""
     center = camera.detect_center(frame)
     position = None
@@ -28,9 +29,11 @@ def inspect_frame(camera, frame, args, controller):
     if center is not None:
         height, width = frame.shape[:2]
         try:
+            pose = camera_pose(args, feedback)
             position = pixel_to_ground_robot(
-                *center, width, height, args.robot_z, args.tilt_rad,
+                *center, width, height, pose["height_offset"] + pose["body_height"], pose["tilt"],
                 args.horizontal_fov, args.vertical_fov,
+                camera_base_height_m=pose["base_height"],
             )
             status = "Tracking"
         except ValueError as exc:
@@ -145,14 +148,12 @@ def run_dashboard(display, args, *, robot_control=None):
             if camera is not None:
                 started_at = observed_at
                 try:
-                    projection_args = args
-                    if robot_control is not None:
-                        lift = robot_control.status()
-                        if lift.get("lift_fresh") and lift.get("lift_position") is not None:
-                            projection_args = copy(args)
-                            projection_args.robot_z = lift["lift_position"]
-                    last_frame = camera.read_frame(timeout=0.2)
-                    center, position, command, status = inspect_frame(camera, last_frame, projection_args, controller)
+                    feedback = robot_control.status() if robot_control is not None else None
+                    # The dashboard camera is mounted upside down. Correct the
+                    # image before detection so targeting matches the preview.
+                    last_frame = cv2.rotate(camera.read_frame(timeout=0.2), cv2.ROTATE_180)
+                    center, position, command, status = inspect_frame(
+                        camera, last_frame, args, controller, feedback=feedback)
                     if time.monotonic() - started_at > args.target_timeout:
                         center, position, command = None, None, controller.compute(None)
                         status = "Camera result expired"

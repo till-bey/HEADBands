@@ -78,9 +78,9 @@ class ControlLoopTests(unittest.TestCase):
         type(robot).running = property(Mock(side_effect=[True, True, True, False]))
         robot.set_velocity.return_value = True
         prepare = Mock(side_effect=[
-            (PController(linear_kp=0.1), 0.5),
-            (PController(linear_kp=0.2), 0.5),
-            (PController(linear_kp=0.2), 0.05),
+            (PController(linear_kp=0.1, target_distance=0), 0.5),
+            (PController(linear_kp=0.2, target_distance=0), 0.5),
+            (PController(linear_kp=0.2, target_distance=0), 0.05),
         ])
         report = Mock()
         with patch("main.time.monotonic", return_value=100):
@@ -106,9 +106,12 @@ class ControlLoopTests(unittest.TestCase):
         robot.wait.assert_called_once_with(0.05)
         return robot
 
-    def test_fresh_target_turns_or_drives(self):
+    def test_fresh_target_drives_and_steers_together(self):
         self.run_loop({"x": 0, "y": 2}).set_velocity.assert_called_once_with(0.15, 0)
-        self.run_loop({"x": 1, "y": 2}).set_velocity.assert_called_once_with(0, -0.4)
+        robot = self.run_loop({"x": 1, "y": 2})
+        linear, angular = robot.set_velocity.call_args.args
+        self.assertAlmostEqual(linear, 0.15 * 2 / (5 ** 0.5))
+        self.assertEqual(angular, -0.4)
 
     def test_stale_or_missing_target_stops(self):
         for position, timestamp in (({"x": 0, "y": 2}, 99), (None, 100)):

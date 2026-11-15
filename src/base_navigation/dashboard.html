@@ -27,6 +27,22 @@
     .tab-panel { min-height: 270px; }
     #message { margin-top: 14px; font-size: 13px; min-height: 40px; }
     .preview { align-self: start; padding: 10px; }
+    .camera-monitor { width: 100%; }
+    #view { background: #10151c; border-radius: 8px; }
+    .ultrasound-panel { border-top: 1px solid #304053; padding: 16px; }
+    .ultrasound-panel h2 { font-size: 18px; margin: 0; }
+    #ultrasound-diamond { display: block; width: 100%; max-width: 360px; margin: 8px auto; }
+    #ultrasound-diamond polygon { stroke: #19222e; stroke-width: 4; transition: fill .2s; }
+    #ultrasound-diamond text { fill: #c0cede; text-anchor: middle; font: 13px system-ui; }
+    #ultrasound-diamond [data-level="unknown"] { fill: #536377; }
+    #ultrasound-diamond [data-level="clear"] { fill: #87dfbd; }
+    #ultrasound-diamond [data-level="warning"] { fill: #f4c76a; }
+    #ultrasound-diamond [data-level="danger"] { fill: #f28e88; }
+    #ultrasound-diamond #ultrasound-alert { font-size: 40px; font-weight: 800; }
+    .ultrasound-panel summary { cursor: pointer; color: #c0cede; }
+    .ultrasound-panel select { font-size: 12px; padding: 4px; }
+    .controller-actions { margin: 12px 0 18px; }
+    .controller-actions button { margin-top: 0; }
     .robot-controls { padding: 14px 14px 20px; margin-bottom: 10px; border-bottom: 1px solid #304053; }
     .robot-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .robot-heading h2 { margin: 0; font-size: 18px; }
@@ -68,37 +84,65 @@
       <label for="target_timeout">Result timeout (s)</label><input id="target_timeout" name="target_timeout" type="number" min="0.000001" step="any" required>
     </section>
     <section id="panel-robot" class="tab-panel" role="tabpanel" aria-labelledby="tab-robot" hidden>
+      <label for="camera_base_height">Camera base height (m)</label><input id="camera_base_height" name="camera_base_height" type="number" min="0.001" step="any" value="0.83" required>
       <div class="pair">
-        <div><label for="robot_z">Robot lift (m)</label><input id="robot_z" name="robot_z" type="number" min="0" step="any" required></div>
-        <div><label for="tilt_rad">Downward tilt (rad)</label><input id="tilt_rad" name="tilt_rad" type="number" step="any" required></div>
+        <div><label for="robot_z">Height offset (m)</label><input id="robot_z" name="robot_z" type="number" min="0" step="any" required></div>
+        <div><label for="tilt_rad">Tilt offset (rad)</label><input id="tilt_rad" name="tilt_rad" type="number" step="any" required></div>
       </div>
-      <p class="caption">Camera height is 0.83 m + lift. Tilt is zero horizontal and positive downward.</p>
+      <p class="caption">Offsets describe the camera mounting. Fresh ROS body height and head tilt are added automatically; positive tilt looks down.</p>
+      <div aria-live="polite" aria-label="Applied camera calibration">
+        <p><strong>Applied camera height: <output id="camera-height">—</output> m</strong></p>
+        <p id="camera-height-sum" class="caption">Waiting for calibration…</p>
+        <p><strong>Applied camera tilt: <output id="camera-tilt">—</output></strong></p>
+        <p id="camera-tilt-sum" class="caption"></p>
+        <p id="camera-pose-source" class="caption"></p>
+      </div>
       <label for="max_linear_speed">Max forward speed (m/s)</label><input id="max_linear_speed" name="max_linear_speed" type="number" min="0.000001" step="any" required>
       <label for="max_angular_speed">Max turn speed (rad/s)</label><input id="max_angular_speed" name="max_angular_speed" type="number" min="0.000001" step="any" required>
     </section>
     <section id="panel-detector" class="tab-panel" role="tabpanel" aria-labelledby="tab-detector" hidden>
+      <div class="pair">
+        <div><label for="canny_low">Rim edge lower threshold</label><input id="canny_low" name="canny_low" type="number" min="0" max="254" step="1" required></div>
+        <div><label for="canny_high">Rim edge upper threshold</label><input id="canny_high" name="canny_high" type="number" min="1" max="255" step="1" required></div>
+      </div>
       <label for="resolution">Processing width</label><select id="resolution" name="resolution"><option>320</option><option>480</option><option>640</option><option>960</option><option>1280</option></select>
       <div class="pair">
         <div><label for="rgb_sum_min">Minimum RGB sum</label><input id="rgb_sum_min" name="rgb_sum_min" type="number" min="0" max="765" step="1" required></div>
         <div><label for="channel_difference_max">Maximum delta</label><input id="channel_difference_max" name="channel_difference_max" type="number" min="0" max="255" step="1" required></div>
       </div>
       <p class="caption">Higher sum requires brighter pixels. Higher delta allows more color variation.</p>
+      <h3>Ellipse fitting</h3>
+      <div class="pair">
+        <div><label for="min_radius">Minimum radius (px)</label><input id="min_radius" name="min_radius" type="number" min="1" step="1" required></div>
+        <div><label for="max_radius">Maximum radius (px)</label><input id="max_radius" name="max_radius" type="number" min="2" step="1" required></div>
+      </div>
+      <label for="min_ellipse_ratio">Minimum axis ratio</label><input id="min_ellipse_ratio" name="min_ellipse_ratio" type="number" min="0.01" max="1" step="0.01" required>
+      <label for="min_area">Minimum contour area (px²)</label><input id="min_area" name="min_area" type="number" min="1" step="1" required>
+      <label for="min_white_fraction">Minimum white fill fraction</label><input id="min_white_fraction" name="min_white_fraction" type="number" min="0.01" max="1" step="0.01" required>
+      <p class="caption">Radius and area use processing pixels. Lower axis ratios allow more tilted discs; higher white fill requires more white inside the ellipse. Maximum radius must exceed minimum radius.</p>
     </section>
     <section id="panel-controller" class="tab-panel" role="tabpanel" aria-labelledby="tab-controller" hidden>
       <div id="controller-fields"></div>
     </section>
     <div class="settings-actions">
-      <button id="connect" type="submit" disabled>Connect / apply settings</button>
+      <button id="connect" type="submit" disabled>Save &amp; apply settings</button>
       <div class="pair">
         <button id="save" class="secondary" type="button" disabled>Save settings</button>
         <button id="reload" class="secondary" type="button" disabled>Reload saved values</button>
       </div>
       <button id="disconnect" class="secondary" type="button" disabled>Disconnect camera</button>
-      <p class="caption">Save stores values from all tabs in JSON. Reload restores all tabs; use Connect / apply settings to apply them.</p>
+      <p class="caption">Save &amp; apply stores all tabs, including lift and tilt, and applies them. Save settings stores values without changing the camera. Reload restores the saved values.</p>
       <p id="message" role="status">Loading settings…</p>
     </div>
   </form>
   <section class="preview" aria-label="Camera preview">
+    <div class="camera-monitor">
+      <img id="view" alt="Waiting for camera preview">
+      <div class="pair controller-actions" aria-label="Controller controls">
+        <button id="robot-start" type="button" disabled>Run controller</button>
+        <button id="robot-stop" class="stop" type="button">Stop robot</button>
+      </div>
+    </div>
     <section class="robot-controls" aria-label="ROS navigation controls">
       <div class="robot-heading"><h2>ROS navigation</h2><span id="robot-connection" class="robot-badge" data-state="disconnected">Disconnected</span></div>
       <p id="robot-detail" role="status">Connect ROS to enable robot commands. Camera preview works without ROS.</p>
@@ -110,10 +154,6 @@
         <button id="robot-connect" class="secondary" type="button">Connect ROS</button>
         <button id="robot-disconnect" class="secondary" type="button" disabled>Disconnect ROS</button>
       </div>
-      <div class="pair">
-        <button id="robot-start" type="button" disabled>Run controller</button>
-        <button id="robot-stop" class="stop" type="button">Stop robot</button>
-      </div>
       <div class="robot-speeds" aria-label="Measured body lift">
         <span>Body lift <strong id="lift-position">—</strong> m</span>
       </div>
@@ -122,13 +162,51 @@
         <button id="lift-up" class="secondary" type="button" disabled>Body Up · 1 cm</button>
         <button id="lift-down" class="secondary" type="button" disabled>Body Down · 1 cm</button>
       </div>
+      <div class="robot-speeds" aria-label="Measured head angle">
+        <span>Head pitch <strong id="head-pitch">—</strong>°</span>
+      </div>
+      <p id="head-detail" role="status">Connect ROS to adjust head angle.</p>
+      <div class="pair">
+        <button id="head-up" class="secondary" type="button" disabled>Look Up · 5°</button>
+        <button id="head-down" class="secondary" type="button" disabled>Look Down · 5°</button>
+      </div>
+      <p class="caption">Head movement pauses navigation and preserves yaw. The measured head tilt is added to the camera tilt offset automatically.</p>
       <p id="robot-message" role="status" aria-live="polite"></p>
-      <p class="caption">Run uses the applied camera and controller settings. Body buttons require fresh lift feedback and pause navigation. Stop robot stops the base and body lift.</p>
+      <p class="caption">Run uses the applied camera and controller settings. Body buttons require fresh lift feedback and pause navigation. Stop robot stops the base, body lift and head.</p>
     </section>
-    <img id="view" alt="Waiting for camera preview">
-    <p class="caption">Angle: zero forward, positive right. Height: 0.83 m + lift. Stop the server with Ctrl+C in the terminal.</p>
+    <section class="ultrasound-panel" aria-label="Ultrasound proximity">
+      <h2>Ultrasound proximity</h2>
+      <button id="avoidance-toggle" class="secondary" type="button" aria-pressed="false">Enable obstacle avoidance</button>
+      <p id="avoidance-status" role="status">Disabled. Enabling avoidance pauses the controller.</p>
+      <svg id="ultrasound-diamond" viewBox="0 0 320 280" role="img" aria-label="Ultrasound readings unavailable">
+        <polygon id="ultrasound-front" data-level="unknown" points="160,50 205,95 180,120 160,100 140,120 115,95"/>
+        <polygon id="ultrasound-right" data-level="unknown" points="205,95 250,140 205,185 180,160 200,140 180,120"/>
+        <polygon id="ultrasound-rear" data-level="unknown" points="205,185 160,230 115,185 140,160 160,180 180,160"/>
+        <polygon id="ultrasound-left" data-level="unknown" points="115,185 70,140 115,95 140,120 120,140 140,160"/>
+        <text x="160" y="22">Front</text><text id="ultrasound-front-value" x="160" y="40">—</text>
+        <text x="284" y="134">Right</text><text id="ultrasound-right-value" x="284" y="154">—</text>
+        <text x="160" y="254">Rear</text><text id="ultrasound-rear-value" x="160" y="274">—</text>
+        <text x="36" y="134">Left</text><text id="ultrasound-left-value" x="36" y="154">—</text>
+        <text id="ultrasound-alert" data-level="unknown" x="160" y="154">?</text>
+      </svg>
+      <p id="ultrasound-detail" role="status">Connect ROS to read ultrasound sensors.</p>
+      <p class="caption">Red ≤ 0.30 m · Amber ≤ 0.60 m · Green &gt; 0.60 m · Gray = unavailable. When enabled, avoidance repels within 0.60 m and stops at 0.20 m. Missing or stale coverage stops navigation.</p>
+      <details>
+        <summary>Sensor positions</summary>
+        <p class="caption">Assign sensors to their physical sides. Multiple sensors per side are supported. Avoidance requires fresh readings on all four sides and uses these same assignments. Changing assignments while enabled pauses the controller.</p>
+        <div class="pair">
+          <div><label for="ultrasound-map-front">Front sensors</label><select id="ultrasound-map-front" multiple size="3"></select></div>
+          <div><label for="ultrasound-map-right">Right sensors</label><select id="ultrasound-map-right" multiple size="3"></select></div>
+          <div><label for="ultrasound-map-rear">Rear sensors</label><select id="ultrasound-map-rear" multiple size="3"></select></div>
+          <div><label for="ultrasound-map-left">Left sensors</label><select id="ultrasound-map-left" multiple size="3"></select></div>
+        </div>
+        <button id="ultrasound-auto" class="secondary" type="button">Reset to automatic placement</button>
+      </details>
+    </section>
+    <p class="caption">Angle: zero forward, positive right. Height and tilt include applied mounting offsets and fresh ROS feedback. Stop the server with Ctrl+C in the terminal.</p>
   </section>
 </main>
+<script src="/ultrasound_view.js"></script>
 <script>
 const form = document.getElementById('settings');
 const message = document.getElementById('message');
@@ -160,7 +238,7 @@ for (const [index, tab] of tabs.entries()) {
 const controllerFields = {
   angular_kp: ['Angular gain', 0.000001], linear_kp: ['Linear gain', 0.000001],
   angle_tolerance: ['Angle tolerance (rad)', 0.000001], distance_tolerance: ['Distance tolerance (m)', 0.000001],
-  target_distance: ['Target distance (m)', 0],
+  target_distance: ['Tracking target distance (m)', 0],
 };
 for (const [name, [title, min]] of Object.entries(controllerFields)) {
   const label = document.createElement('label'); label.htmlFor = name; label.textContent = title;
@@ -246,7 +324,7 @@ document.getElementById('reload').addEventListener('click', async () => {
   try {
     const result = await post('/settings/reload', {});
     fillForm(result.settings);
-    message.textContent = result.message + ' Click Connect / apply settings to use these values.';
+    message.textContent = result.message + ' Click Save & apply settings to use these values.';
   } catch (error) { message.textContent = error.message; }
   finally { setBusy(false); }
 });
@@ -261,22 +339,27 @@ const robotDisconnect = document.getElementById('robot-disconnect');
 const robotStart = document.getElementById('robot-start');
 const liftUp = document.getElementById('lift-up');
 const liftDown = document.getElementById('lift-down');
+const headUp = document.getElementById('head-up');
+const headDown = document.getElementById('head-down');
 const robotMessage = document.getElementById('robot-message');
 let robotState = {connection: 'disconnected', running: false, drive_connected: false};
 let robotBusy = false;
 function updateRobotButtons() {
   robotConnect.disabled = robotBusy || ['connecting', 'connected'].includes(robotState.connection);
   robotDisconnect.disabled = robotBusy || robotState.connection === 'disconnected';
-  robotStart.disabled = robotBusy || robotState.connection !== 'connected' || !robotState.drive_connected || robotState.running || robotState.lift_moving;
-  const liftReady = !robotBusy && robotState.connection === 'connected' && robotState.lift_connected && robotState.lift_fresh && !robotState.running && !robotState.lift_moving;
+  robotStart.disabled = robotBusy || robotState.connection !== 'connected' || !robotState.drive_connected || robotState.running || robotState.lift_moving || robotState.head_moving || (robotState.avoidance_enabled && !robotState.avoidance_ready);
+  const liftReady = !robotBusy && robotState.connection === 'connected' && robotState.lift_connected && robotState.lift_fresh && !robotState.running && !robotState.lift_moving && !robotState.head_moving;
   liftUp.disabled = liftDown.disabled = !liftReady;
+  const headReady = !robotBusy && robotState.connection === 'connected' && robotState.head_connected && robotState.head_fresh && !robotState.running && !robotState.lift_moving && !robotState.head_moving;
+  headUp.disabled = headDown.disabled = !headReady;
   // Stop stays available during camera settings requests and ROS connection attempts.
 }
 function showRobotState(state) {
   robotState = state;
+  if (typeof renderUltrasound === 'function') renderUltrasound(state);
   const badge = document.getElementById('robot-connection');
-  badge.dataset.state = state.running || state.lift_moving ? 'running' : state.connection;
-  badge.textContent = state.running ? 'Running' : state.lift_moving ? 'Adjusting body' : ({connected: 'Connected · stopped', connecting: 'Connecting', error: 'ROS unavailable', disconnected: 'Disconnected'}[state.connection] || state.connection);
+  badge.dataset.state = state.running || state.lift_moving || state.head_moving ? 'running' : state.connection;
+  badge.textContent = state.running ? 'Running' : state.lift_moving ? 'Adjusting body' : state.head_moving ? 'Adjusting head' : ({connected: 'Connected · stopped', connecting: 'Connecting', error: 'ROS unavailable', disconnected: 'Disconnected'}[state.connection] || state.connection);
   document.getElementById('robot-detail').textContent = state.status;
   for (const [id, value] of [['robot-linear', state.linear_speed], ['robot-angular', state.angular_speed]]) {
     document.getElementById(id).textContent = Number.isFinite(value) ? value.toFixed(3) : '—';
@@ -286,10 +369,23 @@ function showRobotState(state) {
     : !state.lift_connected ? 'Lift controller is not connected.'
     : !state.lift_fresh ? 'Waiting for fresh lift feedback.'
     : state.lift_moving ? 'Moving body to the requested height.' : 'Ready · 1 cm per click.';
+  document.getElementById('head-pitch').textContent = Number.isFinite(state.head_pitch) ? (state.head_pitch * 180 / Math.PI).toFixed(1) : '—';
+  document.getElementById('head-detail').textContent = state.connection !== 'connected' ? 'Connect ROS to adjust head angle.'
+    : !state.head_connected ? 'Head controller is not connected.'
+    : !state.head_fresh ? 'Waiting for fresh head pitch and yaw feedback.'
+    : state.head_moving ? 'Adjusting head angle.' : 'Ready · 5° per click · positive pitch looks down.';
+  const pose = state.camera_pose;
+  const validPose = pose && Number.isFinite(pose.height) && Number.isFinite(pose.tilt);
+  document.getElementById('camera-height').textContent = validPose ? pose.height.toFixed(3) : '—';
+  document.getElementById('camera-tilt').textContent = validPose ? `${pose.tilt.toFixed(4)} rad (${(pose.tilt * 180 / Math.PI).toFixed(1)}°)` : '—';
+  document.getElementById('camera-height-sum').textContent = validPose ? `${pose.base_height.toFixed(3)} m base + ${pose.height_offset.toFixed(3)} m offset + ${pose.body_height.toFixed(3)} m ROS body height` : '';
+  document.getElementById('camera-tilt-sum').textContent = validPose ? `${pose.tilt_offset.toFixed(4)} rad offset + ${pose.head_tilt.toFixed(4)} rad ROS head tilt` : '';
+  document.getElementById('camera-pose-source').textContent = validPose ? `Body: ${pose.lift_fresh ? 'live ROS' : 'no fresh feedback; adding 0'}. Head: ${pose.head_fresh ? 'live ROS' : 'no fresh feedback; adding 0'}. Totals use applied settings; save & apply form edits to update them.` : 'Calibration unavailable.';
   updateRobotButtons();
 }
-async function robotPost(path) {
-  const values = path === '/robot/start' || path.startsWith('/robot/lift/') ? {generation: robotState.generation} : {};
+async function robotPost(path, extraValues = {}) {
+  const values = path === '/robot/start' || path === '/robot/avoidance' || (path.startsWith('/robot/lift/') || path.startsWith('/robot/head/')) ? {generation: robotState.generation} : {};
+  Object.assign(values, extraValues);
   const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values)});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Robot request failed');
@@ -300,24 +396,28 @@ async function refreshRobot() {
   if (!response.ok) throw new Error('Robot status is unavailable');
   showRobotState(await response.json());
 }
-async function robotAction(path, busy = true) {
+async function robotAction(path, busy = true, values = {}) {
   if (busy) { robotBusy = true; updateRobotButtons(); }
   try {
-    const result = await robotPost(path);
+    const result = await robotPost(path, values);
     robotMessage.textContent = result.message;
     await refreshRobot();
   } catch (error) { robotMessage.textContent = error.message; }
   finally { if (busy) { robotBusy = false; updateRobotButtons(); } }
 }
 robotConnect.addEventListener('click', () => robotAction('/robot/connect'));
+globalThis.configureUltrasoundAvoidance = (enabled, mapping) => robotAction('/robot/avoidance', true, {enabled, mapping});
 robotDisconnect.addEventListener('click', () => robotAction('/robot/disconnect'));
 robotStart.addEventListener('click', () => robotAction('/robot/start'));
 liftUp.addEventListener('click', () => robotAction('/robot/lift/up'));
 liftDown.addEventListener('click', () => robotAction('/robot/lift/down'));
+headUp.addEventListener('click', () => robotAction('/robot/head/up'));
+headDown.addEventListener('click', () => robotAction('/robot/head/down'));
 document.getElementById('robot-stop').addEventListener('click', () => robotAction('/robot/stop', false));
 function stopWhenLeaving() {
   robotState.running = false;
   robotState.lift_moving = false;
+  robotState.head_moving = false;
   if (navigator.sendBeacon) navigator.sendBeacon('/robot/stop', new Blob(['{}'], {type: 'application/json'}));
   else fetch('/robot/stop', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', keepalive: true}).catch(() => {});
 }
@@ -327,7 +427,7 @@ document.addEventListener('visibilitychange', () => {
 });
 async function pollRobot() {
   try {
-    if ((robotState.running || robotState.lift_moving) && document.visibilityState === 'visible') await robotPost('/robot/heartbeat');
+    if ((robotState.running || robotState.lift_moving || robotState.head_moving) && document.visibilityState === 'visible') await robotPost('/robot/heartbeat');
     await refreshRobot();
   } catch (error) {
     showRobotState({connection: 'error', running: false, drive_connected: false,

@@ -11,8 +11,10 @@ from camera import CameraTargetReader, create_camera
 
 if __package__:
     from .config import parse_args, create_controller
+    from .calibration import camera_pose
 else:
     from config import parse_args, create_controller
+    from calibration import camera_pose
 
 
 def control_step(reader, controller, robot, *, target_timeout=0.5):
@@ -56,6 +58,7 @@ def main(argv=None):
     reader = CameraTargetReader(
         camera, robot_z=args.robot_z, tilt_rad=args.tilt_rad,
         horizontal_fov_deg=args.horizontal_fov, vertical_fov_deg=args.vertical_fov,
+        camera_base_height_m=args.camera_base_height,
     )
     # Load ROS only when running navigation, keeping --help usable without ROS.
     if __package__:
@@ -64,8 +67,20 @@ def main(argv=None):
         from navigation import RobotNavigation
     try:
         with RobotNavigation() as robot:
+            def prepare_step():
+                lift, head = robot.lift_status, robot.head_status
+                pose = camera_pose(args, {
+                    'lift_fresh': lift['fresh'], 'lift_position': lift['position'],
+                    'head_fresh': head['fresh'], 'head_pitch': head['pitch'],
+                })
+                reader.update_geometry(robot_z=pose['height_offset'] + pose['body_height'],
+                                       tilt_rad=pose['tilt'], camera_base_height_m=pose['base_height'])
+                return controller, args.target_timeout
+
+            prepare_step()
             reader.start()
-            control_loop(reader, controller, robot, target_timeout=args.target_timeout)
+            control_loop(reader, controller, robot, target_timeout=args.target_timeout,
+                         prepare_step=prepare_step)
     except KeyboardInterrupt:
         pass
     finally:

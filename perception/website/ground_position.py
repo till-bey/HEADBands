@@ -69,12 +69,13 @@ def draw_forward_meter(frame, camera_height, tilt_rad, horizontal_fov_deg, verti
     return annotated, note
 
 
-def render_ground_position(settings: DetectorSettings) -> None:
+def render_ground_position(settings: DetectorSettings, *, saved_configuration=None) -> None:
+    saved = saved_configuration or {}
     st.subheader("Frisbee ground position")
-    st.caption("Uses the white-disc settings in the sidebar and the imported FrisbeeCamera class. Pixel coordinates refer to the upright displayed camera image at full resolution.")
+    st.caption("Uses the rim and ellipse settings in the sidebar and the imported FrisbeeCamera class. Pixel coordinates refer to the upright displayed camera image at full resolution.")
     with st.form("ground_camera_form"):
-        url = st.text_input("Ground-position camera URL", value="http://10.87.163.107:4747/video")
-        mode = st.selectbox("Ground-position stream format", STREAM_MODES)
+        url = st.text_input("Ground-position camera URL", value=saved.get("url", ""), key="ground_cfg_url")
+        mode = st.selectbox("Ground-position stream format", STREAM_MODES, index=int(saved.get("snapshot", False)), key="ground_cfg_mode")
         connect = st.form_submit_button("Connect ground-position camera")
     if connect:
         previous = st.session_state.pop("ground_position_camera", None)
@@ -89,13 +90,14 @@ def render_ground_position(settings: DetectorSettings) -> None:
     orientation = st.selectbox("Camera orientation", ["Portrait (clockwise)", "Portrait (counterclockwise)", "As received"])
     st.caption("Portrait streams are kept upright. Landscape-shaped streams rotate 90° in the selected direction before detection and projection.")
     a, b, c = st.columns(3)
-    robot_z = a.number_input("Robot vertical lift Z (m)", min_value=0.0, value=0.0, step=0.01)
-    height = CAMERA_BASE_HEIGHT_M + robot_z
-    tilt_rad = b.number_input("Camera tilt down from horizontal (rad)", min_value=-math.pi / 2, max_value=math.pi / 2, value=math.radians(15), step=0.01, format="%.4f")
-    hfov = c.number_input("Horizontal FOV (°)", min_value=1.0, max_value=179.0, value=77.32, step=0.01)
-    st.caption(f"Camera height: 0.83 m base + {robot_z:.2f} m lift = {height:.2f} m. Robot ground X/Y = (0, 0). Tilt is 0 rad horizontal, positive downward.")
-    explicit_vfov = st.checkbox("Specify vertical FOV", value=True)
-    vfov = st.number_input("Vertical FOV (°)", min_value=1.0, max_value=179.0, value=61.93, step=0.01) if explicit_vfov else None
+    base_height = a.number_input("Camera base height (m)", min_value=0.000001, value=saved.get("camera_base_height", CAMERA_BASE_HEIGHT_M), step=0.01, key="ground_cfg_base_height")
+    robot_z = b.number_input("Height offset (m)", min_value=0.0, value=saved.get("robot_z", 0.0), step=0.01, key="ground_cfg_robot_z")
+    tilt_rad = c.number_input("Tilt offset (rad)", value=saved.get("tilt_rad", math.radians(15)), step=0.01, format="%.4f", key="ground_cfg_tilt")
+    height = base_height + robot_z
+    hfov = st.number_input("Horizontal FOV (°)", min_value=0.000001, max_value=179.999999, value=saved.get("horizontal_fov", 77.32), step=0.01, key="ground_cfg_hfov")
+    st.caption(f"Saved mounting height: {base_height:.3f} m base + {robot_z:.3f} m offset = {height:.3f} m. Live ROS body/head readings are not stored in the saved file. Tilt is zero horizontal, positive downward.")
+    explicit_vfov = st.checkbox("Specify vertical FOV", value=saved.get("vertical_fov", 61.93) is not None, key="ground_cfg_use_vfov")
+    vfov = st.number_input("Vertical FOV (°)", min_value=0.000001, max_value=179.999999, value=saved.get("vertical_fov") or 61.93, step=0.01, key="ground_cfg_vfov") if explicit_vfov else None
     fov_basis = st.selectbox("FOV calibration axes", ["Displayed image", "Landscape sensor"])
     st.caption("Use Displayed image for FOV measured in the upright portrait image. Choose Landscape sensor for landscape camera specifications; horizontal and vertical FOV will be swapped for portrait, deriving vertical FOV from aspect ratio if omitted.")
     st.caption("Flat ground, no camera roll, and an undistorted image are assumed. FOV calibration must match the camera lens and selected axes. Without vertical FOV, square pixels are assumed. Ground origin is below the camera; X right, Y forward; bearing 0 rad forward, positive right.")
@@ -137,7 +139,7 @@ def render_ground_position(settings: DetectorSettings) -> None:
                 st.caption(f"Displayed FOV: horizontal {effective_hfov:.1f}°, vertical {effective_vfov:.1f}°.")
         with results:
             if center is None:
-                st.info("No white frisbee detected in this frame. Adjust the white-disc thresholds or size limits.")
+                st.info("No frisbee candidate detected in this frame. Adjust rim edge thresholds or ellipse size limits.")
                 return
             px, py = center
             image_height, image_width = frame.shape[:2]
@@ -156,7 +158,7 @@ def render_ground_position(settings: DetectorSettings) -> None:
             angles[0].metric("Camera tilt to ground", f"{tilt_rad:.4f} rad")
             angles[1].metric("Ray angle below ground horizon", f"{ray_angle:.4f} rad")
             try:
-                position = pixel_to_ground_robot(px, py, image_width, image_height, robot_z, tilt_rad, effective_hfov, effective_vfov)
+                position = pixel_to_ground_robot(px, py, image_width, image_height, robot_z, tilt_rad, effective_hfov, effective_vfov, camera_base_height_m=base_height)
             except ValueError as exc:
                 st.warning(str(exc))
                 return

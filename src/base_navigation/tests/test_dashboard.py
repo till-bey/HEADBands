@@ -173,7 +173,14 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(display.show.call_count, 3)
 
     def test_browser_settings_validation_and_disconnect(self):
-        args = parse_args([], dashboard=True)
+        from tempfile import TemporaryDirectory
+        from config import save_settings
+        from test_settings import sample_values
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        settings_path = Path(directory.name) / 'settings.json'
+        save_settings(settings_path, sample_values())
+        args = parse_args(['--settings-file', str(settings_path)], dashboard=True)
         values = {name: getattr(args, name) for name in SETTINGS_FIELDS}
         values.update(url='http://127.0.0.1/stream', robot_z=0.2, horizontal_fov=80,
                       rgb_sum_min=180, channel_difference_max=65)

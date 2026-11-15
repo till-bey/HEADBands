@@ -1,4 +1,4 @@
-"""White discs detected across the full image with contour ellipses.
+"""Frisbee rims and white discs detected across the image with contour ellipses.
 
 This is a classical computer-vision heuristic, not a trained object classifier.
 All coordinates refer to the input BGR image.
@@ -7,13 +7,18 @@ All coordinates refer to the input BGR image.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import dist as math_distance
 
 import cv2
 import numpy as np
 
+RGB_MEAN_RADIUS_SCALE = 0.75
+
 
 @dataclass(frozen=True)
 class DetectorSettings:
+    canny_low: int = 40
+    canny_high: int = 120
     rgb_sum_min: int = 160  # R + G + B, range 0-765
     channel_difference_max: int = 55  # max(R,G,B) - min(R,G,B), range 0-255
     min_radius: int = 10
@@ -31,6 +36,7 @@ class Candidate:
     angle: float           # angle in degrees
     method: str
     score: float           # heuristic 0-1 shape/white match, NOT probability
+    mean_rgb_sum: float = 0.0  # Mean R+G+B inside the inner 75% of both ellipse radii.
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
@@ -102,13 +108,25 @@ def preprocess(frame: np.ndarray, cfg: DetectorSettings) -> tuple[np.ndarray, np
     return threshold_mask, mask
 
 
-def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettings) -> list[Candidate]:
-    """Fit contours of thresholded white regions, then validate ellipse geometry."""
-    contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+def rim_edges(frame: np.ndarray, cfg: DetectorSettings) -> np.ndarray:
+    """Find outer/rim boundaries independently of the disc's interior color."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), cfg.canny_low, cfg.canny_high)
+
+
+def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettings,
+                  *, edge_mask: np.ndarray | None = None) -> list[Candidate]:
+    """Fit rim edges and white regions; report unthresholded interior brightness."""
+    if edge_mask is None:
+        edge_mask = rim_edges(frame, cfg)
+    rim_contours, _ = cv2.findContours(edge_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    white_contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    sources = [(contour, 'Rim ellipse') for contour in rim_contours]
+    sources.extend((contour, 'White ellipse') for contour in white_contours)
     out: list[Candidate] = []
     image_area = frame.shape[0] * frame.shape[1]
 
-    for contour in contours:
+    for contour, method in sources:
         if len(contour) < 5:
             continue
         area = float(cv2.contourArea(contour))
@@ -131,7 +149,15 @@ def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettin
         local_x = points[:, 0] * np.cos(theta) + points[:, 1] * np.sin(theta)
         local_y = -points[:, 0] * np.sin(theta) + points[:, 1] * np.cos(theta)
         radii = np.hypot(local_x / max(width / 2, 1e-6), local_y / max(height / 2, 1e-6))
-        if float(np.mean(np.abs(radii - 1))) > 0.12:
+        fit_error = float(np.mean(np.abs(radii - 1)))
+        fit_limit = 0.07
+        if fit_error > fit_limit:
+            continue
+        # A short arc can fit an ellipse very well. Require support around most
+        # of its perimeter so a single straight/curved edge is not a disc.
+        phases = np.arctan2(local_y / max(height / 2, 1e-6), local_x / max(width / 2, 1e-6))
+        bins = np.floor((phases + np.pi) * (16 / (2 * np.pi))).astype(int) % 16
+        if np.unique(bins).size < 12:
             continue
         center = (int(round(cx)), int(round(cy)))
         axes = (max(1, int(round(width / 2))), max(1, int(round(height / 2))))
@@ -144,7 +170,7 @@ def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettin
         local_center = (center[0] - x0, center[1] - y0)
         filled_ellipse = _disk_mask(patch.shape, local_center, axes, angle)
         whiteness = _fraction_white(patch, filled_ellipse)
-        if whiteness < cfg.min_white_fraction:
+        if method == 'White ellipse' and whiteness < cfg.min_white_fraction:
             continue
 
         ellipse_area = max(1.0, np.pi * axes[0] * axes[1])
@@ -154,11 +180,23 @@ def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettin
         outer = _disk_mask(patch.shape, local_center, (int(axes[0] * 1.25), int(axes[1] * 1.25)), angle)
         ring = cv2.subtract(outer, filled_ellipse)
         outside_white = _fraction_white(patch, ring)
-        if outside_white > 0.65:
+        if method == 'White ellipse' and outside_white > 0.65:
             continue
 
-        score = float(np.clip(0.5 * whiteness + 0.3 * shape_fill + 0.2 * (1 - outside_white), 0, 1))
-        out.append(Candidate(center, axes, float(angle), "Ellipse", score))
+        if method == 'Rim ellipse':
+            score = float(np.clip(0.7 * (1 - fit_error / fit_limit) + 0.3 * shape_fill, 0, 1))
+        else:
+            score = float(np.clip(0.5 * whiteness + 0.3 * shape_fill + 0.2 * (1 - outside_white), 0, 1))
+        # Compute on the original, unannotated BGR patch. Summing channel means
+        # is the mean of per-pixel R+G+B, with no uint8 overflow or white-only bias.
+        # Fixed-point coordinates preserve the exact 0.75 radius scale before
+        # rasterization, including small or thin ellipses.
+        inner_ellipse = np.zeros(patch.shape[:2], dtype=np.uint8)
+        cv2.ellipse(inner_ellipse, tuple(v * 4 for v in local_center),
+                    tuple(round(v * RGB_MEAN_RADIUS_SCALE * 4) for v in axes),
+                    angle, 0, 360, 255, -1, shift=2)
+        mean_rgb_sum = float(sum(cv2.mean(frame[y0:y1, x0:x1], mask=inner_ellipse)[:3]))
+        out.append(Candidate(center, axes, float(angle), method, score, mean_rgb_sum))
 
     return _suppress_overlapping_ellipses(out)
 
@@ -169,26 +207,35 @@ def _suppress_overlapping_ellipses(candidates: list[Candidate]) -> list[Candidat
     for candidate in sorted(candidates, key=lambda d: d.score, reverse=True):
         rect = (candidate.center, (candidate.axes[0] * 2, candidate.axes[1] * 2), candidate.angle)
         duplicate = False
-        for other in chosen:
+        for index, other in enumerate(chosen):
             other_rect = (other.center, (other.axes[0] * 2, other.axes[1] * 2), other.angle)
             _, intersection = cv2.rotatedRectangleIntersection(rect, other_rect)
             if intersection is None:
                 continue
             overlap = cv2.contourArea(intersection)
-            union = 4 * (candidate.axes[0] * candidate.axes[1] + other.axes[0] * other.axes[1]) - overlap
-            if overlap / max(union, 1.0) > 0.5:
+            candidate_area = np.pi * candidate.axes[0] * candidate.axes[1]
+            other_area = np.pi * other.axes[0] * other.axes[1]
+            union = candidate_area + other_area - overlap
+            nested_rim = (math_distance(candidate.center, other.center) <= max(3, 0.2 * min(max(candidate.axes), max(other.axes)))
+                          and overlap / max(1, min(candidate_area, other_area)) > 0.85
+                          and min(candidate_area, other_area) / max(candidate_area, other_area) > 0.45)
+            if overlap / max(union, 1.0) > 0.5 or nested_rim:
+                # Keep the outer rim rather than a second ellipse on its inside.
+                if candidate_area > other_area:
+                    chosen[index] = candidate
                 duplicate = True
                 break
         if not duplicate:
             chosen.append(candidate)
-    return chosen
+    return sorted(chosen, key=lambda candidate: candidate.score, reverse=True)
 
 
 def detect(frame: np.ndarray, cfg: DetectorSettings) -> tuple[list[Candidate], dict[str, np.ndarray]]:
-    """Find white discs using contour ellipses."""
+    """Find disc boundaries and measure RGB within the inner 75% of each radius."""
     threshold_mask, mask = preprocess(frame, cfg)
-    candidates = find_ellipses(frame, mask, cfg)
-    return candidates[:20], {"threshold_mask": threshold_mask, "white_mask": mask}
+    edges = rim_edges(frame, cfg)
+    candidates = find_ellipses(frame, mask, cfg, edge_mask=edges)
+    return candidates[:20], {"threshold_mask": threshold_mask, "white_mask": mask, "edge_mask": edges}
 
 
 def draw_detections(frame: np.ndarray, candidates: list[Candidate], cfg: DetectorSettings) -> np.ndarray:
@@ -199,7 +246,7 @@ def draw_detections(frame: np.ndarray, candidates: list[Candidate], cfg: Detecto
         color = (75, 225, 80)
         cv2.ellipse(result, candidate.center, candidate.axes, candidate.angle, 0, 360, color, 3)
         cv2.circle(result, candidate.center, 3, (255, 80, 180), -1)
-        text = f"#{index} {candidate.method}: {candidate.score:.2f}"
+        text = f"#{index} {candidate.method}: {candidate.score:.2f} | RGB75% {candidate.mean_rgb_sum:.1f}"
         cv2.putText(result, text, (candidate.center[0] - candidate.axes[0],
                                   max(20, candidate.center[1] - max(candidate.axes) - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)

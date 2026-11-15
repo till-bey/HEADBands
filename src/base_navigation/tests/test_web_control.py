@@ -36,6 +36,8 @@ class FakeRobot:
         self._lift_state = {"connected": True, "position": 0.2, "fresh": True, "moving": False}
         self._lift_commands = []
         self._lift_stops = 0
+        self._head_state = {"connected": True, "fresh": True, "pitch": 0.0, "yaw": 0.3, "moving": False}
+        self._head_commands = []
 
     def __enter__(self):
         self.running = True
@@ -44,6 +46,7 @@ class FakeRobot:
     def __exit__(self, *args):
         self.set_velocity(0, 0)
         self.stop_lift()
+        self.stop_head()
         self.running = False
         self.exited = True
 
@@ -94,8 +97,116 @@ class FakeRobot:
         with self._lock:
             return self._lift_stops
 
+    @property
+    def head_status(self):
+        with self._lock:
+            return self._head_state.copy()
+
+    @property
+    def ultrasound_status(self):
+        return getattr(self, '_ultrasound', [])
+
+    def move_head(self, delta_rad):
+        with self._lock:
+            self._head_commands.append(delta_rad)
+            self._head_state['pitch'] += delta_rad
+            self._head_state['moving'] = True
+
+    def stop_head(self):
+        with self._lock:
+            self._head_state['moving'] = False
+
+    def set_head_state(self, **values):
+        with self._lock:
+            self._head_state.update(values)
+
+    def head_commands(self):
+        with self._lock:
+            return self._head_commands.copy()
+
 
 class WebControlTests(unittest.TestCase):
+    def test_avoidance_toggle_stops_and_requires_a_new_run_request(self):
+        self.start()
+        old_generation = self.control.status()['generation']
+        self.control.configure_avoidance(True, {}, expected_generation=old_generation)
+        self.assertFalse(self.control.status()['running'])
+        self.wait_for(lambda: self.robot.commands()[-1] == (0, 0))
+        with self.assertRaises(ValueError):
+            self.control.start(expected_generation=old_generation)
+        with self.assertRaises(ValueError):
+            self.control.start()  # Missing ultrasound coverage.
+        with self.assertRaises(ValueError):
+            self.control.configure_avoidance(False, {}, expected_generation=old_generation)
+
+    def test_avoidance_stale_sensor_stops_and_does_not_resume_on_recovery(self):
+        from test_avoidance import readings
+        self.robot._ultrasound = readings(right=0.35)
+        self.connect()
+        self.control.configure_avoidance(True, {})
+        self.wait_for(lambda: self.control.status()['avoidance_ready'])
+        self.update_target()
+        self.control.start()
+        self.wait_for(lambda: any(linear > 0 and angular > 0 for linear, angular in self.robot.commands()))
+        stale = readings()
+        stale[0]['fresh'] = False
+        self.robot._ultrasound = stale
+        self.wait_for(lambda: not self.control.status()['running'])
+        self.wait_for(lambda: self.robot.commands()[-1] == (0, 0))
+        self.robot._ultrasound = readings()
+        self.wait_for(lambda: self.control.status()['avoidance_ready'])
+        self.assertFalse(self.control.status()['running'])
+
+    def test_avoidance_final_send_rechecks_close_obstacle_and_stop(self):
+        from test_avoidance import readings
+        self.robot._ultrasound = readings()
+        self.connect()
+        self.control.configure_avoidance(True, {})
+        self.wait_for(lambda: self.control.status()['avoidance_ready'])
+        self.update_target()
+        self.control.start()
+        self.robot._ultrasound = readings(front=0.1)
+        self.control._send_velocity(self.robot, 0.15, 0.4)
+        self.assertEqual(self.robot.commands()[-1], (0, 0))
+        self.control.stop()
+        self.robot._ultrasound = readings()
+        self.control._send_velocity(self.robot, 0.15, 0.4)
+        self.assertEqual(self.robot.commands()[-1], (0, 0))
+
+    def test_http_avoidance_toggle_and_mapping_are_token_guarded(self):
+        display = DashboardServer(port=0, robot_control=self.control)
+        try:
+            def post(values):
+                request = Request(display.url + '/robot/avoidance', data=json.dumps(values).encode(),
+                                  headers={'Content-Type': 'application/json'})
+                with urlopen(request, timeout=2) as response:
+                    return json.load(response)
+            with self.assertRaises(HTTPError) as error:
+                post({'enabled': True, 'mapping': {}})
+            self.assertEqual(error.exception.code, 400)
+            old = self.control.status()['generation']
+            post({'enabled': True, 'mapping': {'front': ['/sonar/front']}, 'generation': old})
+            self.assertTrue(self.control.status()['avoidance_enabled'])
+            self.assertEqual(self.control.status()['avoidance_mapping'], {'front': ['/sonar/front']})
+            with self.assertRaises(HTTPError) as error:
+                post({'enabled': False, 'mapping': {}, 'generation': old})
+            self.assertEqual(error.exception.code, 409)
+            post({'enabled': False, 'mapping': {}, 'generation': self.control.status()['generation']})
+            self.assertFalse(self.control.status()['avoidance_enabled'])
+            self.assertFalse(self.control.status()['running'])
+        finally:
+            display.close()
+
+    def test_ultrasound_readings_reach_browser_status_and_clear_on_disconnect(self):
+        self.robot._ultrasound = [{'topic': '/sonar/front', 'side': 'front', 'distance_m': 0.2,
+                                   'fresh': True, 'status': 'valid', 'frame_id': 'front', 'age_seconds': 0}]
+        self.connect()
+        self.wait_for(lambda: bool(self.control.status()['ultrasound']))
+        self.assertEqual(self.control.status()['ultrasound'][0]['distance_m'], 0.2)
+        self.control.disconnect()
+        self.wait_for(lambda: self.control.status()['connection'] == 'disconnected')
+        self.assertEqual(self.control.status()['ultrasound'], [])
+
     def setUp(self):
         self.robot = FakeRobot()
         self.factory = Mock(return_value=self.robot)
@@ -262,6 +373,66 @@ class WebControlTests(unittest.TestCase):
         self.connect()
         self.wait_for(lambda: self.control.status()['lift_connected']
                       and self.control.status()['lift_fresh'])
+
+    def test_head_steps_pause_navigation_block_restart_and_stop_on_lease_expiry(self):
+        import math
+        self.start()
+        self.wait_for(lambda: self.control.status()['head_fresh'])
+        self.control.jog_head('down')
+        self.wait_for(lambda: bool(self.robot.head_commands()))
+        self.wait_for(lambda: self.control.status()['head_moving'])
+        self.assertAlmostEqual(self.robot.head_commands()[0], math.radians(5))
+        self.assertFalse(self.control.status()['running'])
+        self.update_target()
+        with self.assertRaises(ValueError):
+            self.control.start()
+        self.clock.offset += 4
+        self.wait_for(lambda: not self.control.status()['head_moving'])
+        self.assertFalse(self.robot.head_status['moving'])
+
+    def test_head_requires_fresh_feedback_and_rejects_old_tokens(self):
+        with self.assertRaises(ValueError):
+            self.control.jog_head('up')
+        self.connect()
+        self.wait_for(lambda: self.control.status()['head_fresh'])
+        old = self.control.status()['generation']
+        self.control.stop()
+        with self.assertRaises(ValueError):
+            self.control.jog_head('up', expected_generation=old)
+        self.robot.set_head_state(fresh=False)
+        self.wait_for(lambda: not self.control.status()['head_fresh'])
+        with self.assertRaises(ValueError):
+            self.control.jog_head('up')
+        self.assertEqual(self.robot.head_commands(), [])
+
+    def test_http_head_buttons_and_stop(self):
+        import math
+        self.connect()
+        self.wait_for(lambda: self.control.status()['head_fresh'])
+        display = DashboardServer(port=0, robot_control=self.control)
+        try:
+            def post(path, values):
+                request = Request(display.url + path, data=json.dumps(values).encode(),
+                                  headers={'Content-Type': 'application/json'})
+                with urlopen(request, timeout=2) as response:
+                    return json.load(response)
+            with self.assertRaises(HTTPError) as error:
+                post('/robot/head/down', {})
+            self.assertEqual(error.exception.code, 400)
+            for direction, sign in [('up', -1), ('down', 1)]:
+                count = len(self.robot.head_commands())
+                post('/robot/head/' + direction, {'generation': self.control.status()['generation']})
+                self.wait_for(lambda: len(self.robot.head_commands()) > count)
+                self.assertAlmostEqual(self.robot.head_commands()[-1], sign * math.radians(5))
+                post('/robot/stop', {})
+                self.wait_for(lambda: not self.control.status()['head_moving'])
+            post('/robot/head/down', {'generation': self.control.status()['generation']})
+            self.wait_for(lambda: self.control.status()['head_moving'])
+            post('/robot/disconnect', {})
+            self.wait_for(lambda: self.robot.exited)
+            self.assertFalse(self.robot.head_status['moving'])
+        finally:
+            display.close()
 
     def test_lift_buttons_queue_one_centimeter_up_and_down(self):
         self.connect_lift()

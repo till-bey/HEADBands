@@ -1,4 +1,4 @@
-"""Return a white frisbee's center from an MJPEG/RTSP or HTTP snapshot URL.
+"""Return a frisbee rim/disc center from an MJPEG/RTSP or HTTP snapshot URL.
 
 Run: python -m camera 'http://192.168.1.50:8080/stream.mjpg'
 Captured landscape frames rotate clockwise to portrait before analysis.
@@ -67,25 +67,28 @@ def pixel_to_ground(
 CAMERA_BASE_HEIGHT_M = 0.83
 
 
-def _robot_camera_pose(robot_z, tilt_rad):
+def _robot_camera_pose(robot_z, tilt_rad, camera_base_height_m=CAMERA_BASE_HEIGHT_M):
     """Convert robot lift and tilt to camera height (m) and tilt (degrees)."""
     if not isfinite(robot_z) or robot_z < 0:
         raise ValueError("Robot lift must be a finite nonnegative number of meters.")
     if not isfinite(tilt_rad):
         raise ValueError("Robot tilt must be a finite angle in radians.")
-    return CAMERA_BASE_HEIGHT_M + robot_z, math.degrees(tilt_rad)
+    if not isfinite(camera_base_height_m) or camera_base_height_m <= 0:
+        raise ValueError("Camera base height must be finite and positive.")
+    return camera_base_height_m + robot_z, math.degrees(tilt_rad)
 
 
 def pixel_to_ground_robot(
     px, py, image_width, image_height,
     robot_z, tilt_rad, horizontal_fov_deg, vertical_fov_deg=None,
+    *, camera_base_height_m=CAMERA_BASE_HEIGHT_M,
 ):
-    """Ground position for robot lift in meters above the 0.83m camera base.
+    """Ground position for lift above a configurable camera base (default 0.83 m).
 
     Robot ground X/Y are fixed at zero. Tilt is radians downward from horizontal;
     FOV remains degrees. Adds bearing_rad while retaining the original outputs.
     """
-    camera_height, tilt_deg = _robot_camera_pose(robot_z, tilt_rad)
+    camera_height, tilt_deg = _robot_camera_pose(robot_z, tilt_rad, camera_base_height_m)
     result = pixel_to_ground(
         px, py, image_width, image_height, camera_height,
         tilt_deg, horizontal_fov_deg, vertical_fov_deg,
@@ -94,7 +97,7 @@ def pixel_to_ground_robot(
 
 
 class FrisbeeCamera:
-    """Find the strongest white-disc candidate in each fresh camera frame.
+    """Find the strongest rim/disc candidate in each fresh camera frame.
 
     Uses the same RGB white thresholds, mask cleanup, ellipse detector, and
     processing resolution as the website's white detector. Settings are passed
@@ -211,9 +214,10 @@ class FrisbeeCamera:
     def detect_robot_ground_position(
         self, frame: np.ndarray, *, robot_z: float, tilt_rad: float,
         horizontal_fov_deg: float, vertical_fov_deg: float | None = None,
+        camera_base_height_m: float = CAMERA_BASE_HEIGHT_M,
     ) -> dict[str, float] | None:
         """Wrap detect_ground_position with robot height and radian angles."""
-        camera_height, tilt_deg = _robot_camera_pose(robot_z, tilt_rad)
+        camera_height, tilt_deg = _robot_camera_pose(robot_z, tilt_rad, camera_base_height_m)
         result = self.detect_ground_position(
             frame, camera_height=camera_height, tilt_deg=tilt_deg,
             horizontal_fov_deg=horizontal_fov_deg,
@@ -226,11 +230,13 @@ class FrisbeeCamera:
     def get_robot_ground_position(
         self, *, robot_z: float, tilt_rad: float, horizontal_fov_deg: float,
         vertical_fov_deg: float | None = None, timeout: float = 5.0,
+        camera_base_height_m: float = CAMERA_BASE_HEIGHT_M,
     ) -> dict[str, float] | None:
         """Read a fresh frame and calculate position from robot lift and radians."""
         return self.detect_robot_ground_position(
             self._get_frame(timeout), robot_z=robot_z, tilt_rad=tilt_rad,
             horizontal_fov_deg=horizontal_fov_deg, vertical_fov_deg=vertical_fov_deg,
+            camera_base_height_m=camera_base_height_m,
         )
 
     def _get_frame(self, timeout: float) -> np.ndarray:

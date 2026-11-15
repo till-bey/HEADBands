@@ -14,11 +14,11 @@ class VelocityCommand:
 
 @dataclass(frozen=True)
 class PController:
-    """Turn first, then approach a target measured relative to the camera.
+    """Steer and approach simultaneously using camera-relative target position.
 
     Input X points right and Y forward, in meters (FrisbeeCamera convention).
-    Zero position means zero ground distance, within distance_tolerance. Set
-    target_distance to stop short instead. The camera must face straight ahead,
+    Stop at target_distance (default 0.3 m), within distance_tolerance.
+    The camera must face straight ahead,
     with its ground origin aligned with the desired robot stopping point.
     """
 
@@ -28,7 +28,7 @@ class PController:
     max_linear_speed: float = 0.15
     angle_tolerance: float = 0.05  # radians
     distance_tolerance: float = 0.05  # meters
-    target_distance: float = 0.0  # meters
+    target_distance: float = 0.3  # meters from the camera's ground origin
 
     def __post_init__(self):
         for name in ("angular_kp", "linear_kp", "max_angular_speed",
@@ -52,16 +52,20 @@ class PController:
         distance = math.hypot(x, y)
         if not all(math.isfinite(v) for v in (x, y, distance)):
             return VelocityCommand()
-        error = distance - self.target_distance
-        if error <= self.distance_tolerance:
+        # Bearing is unstable at the camera origin, where no approach is needed.
+        if distance <= self.distance_tolerance:
             return VelocityCommand(state="reached")
+        error = distance - self.target_distance
         bearing = math.atan2(x, y)
+        angular = 0.0
         if abs(bearing) > self.angle_tolerance:
             # Camera bearing is positive right; ROS angular.z is positive left.
             angular = max(-self.max_angular_speed,
                           min(self.max_angular_speed, -self.angular_kp * bearing))
-            return VelocityCommand(angular_speed=angular, state="aligning")
-        return VelocityCommand(
-            linear_speed=min(self.max_linear_speed, self.linear_kp * error),
-            state="approaching",
-        )
+        linear = 0.0
+        if error > self.distance_tolerance and y > 0:
+            # Approach while steering, slowing as the target moves off-center.
+            linear = min(self.max_linear_speed, self.linear_kp * error) * math.cos(bearing)
+        state = ("tracking" if linear and angular else "approaching" if linear
+                 else "aligning" if angular else "reached")
+        return VelocityCommand(linear_speed=linear, angular_speed=angular, state=state)

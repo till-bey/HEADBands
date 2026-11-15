@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -10,19 +11,25 @@ import cv2
 import numpy as np
 import streamlit as st
 
-from detector import DetectorSettings, detect, draw_detections, prepare_frame
+# Streamlit adds website/ to the import path, but sibling packages live in
+# perception/. Resolve from this file so launching from any directory works.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from detector import DetectorSettings, detect, draw_detections, prepare_frame, RGB_MEAN_RADIUS_SCALE
 from website.ground_position import render_ground_position
+from website.saved_settings import DEFAULT_SETTINGS_FILE, DEFAULT_DASHBOARD_URL, load_navigation_settings
 from camera import LatestFrameCamera, STREAM_MODES, VIDEO_STREAM, SNAPSHOT
 from website.media_utils import (
     IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, list_media, read_video_frame, video_info,
 )
 
-# Media folders live at the project root, one level above the website.
-ROOT = Path(__file__).resolve().parents[1]
+# Media paths use the same absolute root as the imports.
 IMAGE_DIR = ROOT / "Dataset" / "Images"
 VIDEO_DIR = ROOT / "Dataset" / "Videos"
 SAMPLE_DIR = ROOT / "samples"
-MODEL_NAME = "White discs"
+MODEL_NAME = "Frisbee rims and discs"
 
 st.set_page_config(page_title="Ground Frisbee Finder", page_icon="🥏", layout="wide")
 
@@ -82,32 +89,86 @@ def saved_upload_path(content: bytes, filename: str) -> Path:
     return path
 
 
+def show_candidate_details(candidates) -> None:
+    st.subheader("Candidate details")
+    if not candidates:
+        st.info("No candidate meets the current settings. Adjust rim edge thresholds or size limits.")
+        return
+    st.dataframe([
+        {"#": i, "Found by": candidate.method,
+         "Center X": candidate.center[0], "Center Y": candidate.center[1],
+         "Axis X (px)": candidate.axes[0], "Axis Y (px)": candidate.axes[1],
+         "Match score (heuristic)": round(candidate.score, 3),
+         "Mean R+G+B (0–765)": round(candidate.mean_rgb_sum, 2)}
+        for i, candidate in enumerate(candidates, start=1)
+    ], hide_index=True, use_container_width=True)
+    st.caption("Mean R+G+B uses the inner 75% of both ellipse radii, excluding the outer rim. All pixels in this inner ellipse are included, including dark markings. Range: 0–765.")
+
+
 with st.sidebar:
+    st.header("Shared saved configuration")
+    with st.expander("Configuration source"):
+        shared_path = st.text_input("Navigation settings file", str(DEFAULT_SETTINGS_FILE), key="shared_config_path")
+        dashboard_url = st.text_input("Navigation dashboard URL", DEFAULT_DASHBOARD_URL, key="shared_dashboard_url")
+    reload_shared = st.button("Reload saved configuration", use_container_width=True)
+    source_identity = (shared_path, dashboard_url)
+    if ("shared_navigation_values" not in st.session_state or reload_shared
+            or st.session_state.get("shared_source_identity") != source_identity):
+        try:
+            loaded, loaded_source = load_navigation_settings(shared_path, dashboard_url)
+            st.session_state["shared_navigation_values"] = loaded
+            st.session_state["shared_navigation_source"] = loaded_source
+            st.session_state.pop("shared_navigation_error", None)
+            # Reset only calibration/detector form widgets. Camera readers remain
+            # open until the user explicitly reconnects with the newly loaded URL.
+            for key in list(st.session_state):
+                if key.startswith(("det_", "ground_cfg_", "live_cfg_")):
+                    del st.session_state[key]
+        except (OSError, ValueError, TypeError, OverflowError) as exc:
+            st.session_state["shared_navigation_error"] = str(exc)
+            st.session_state.setdefault("shared_navigation_values", {})
+        st.session_state["shared_source_identity"] = source_identity
+    saved_configuration = st.session_state["shared_navigation_values"]
+    if "shared_navigation_error" in st.session_state:
+        st.warning(st.session_state["shared_navigation_error"])
+    else:
+        st.caption("Loaded: " + st.session_state["shared_navigation_source"])
+    st.caption("Read-only: Streamlit adjustments are temporary. Save in the navigation dashboard, then reload here. Reconnect cameras after changing their saved URL or format.")
+    defaults = DetectorSettings()
     st.header("Detection settings")
     processing_width = st.selectbox(
-        "Processing resolution", [320, 480, 640, 960, 1280], index=2,
+        "Processing resolution", [320, 480, 640, 960, 1280],
+        index=[320, 480, 640, 960, 1280].index(saved_configuration.get("resolution", 640)), key="det_resolution",
         format_func=lambda w: f"{w}×{w * 3 // 4}",
         help="Portrait swaps the dimensions. Lower sizes reduce work but can lose small discs. Radius and area settings use these pixels.",
     )
     st.caption("For speed, start with 320×240.")
-    st.subheader("White detection")
-    st.caption("Contour ellipses detect round and tilted discs across the full image.")
+    st.subheader("Rim detection")
+    st.caption("Fit ellipses to the frisbee's outer edges, including tilted side views.")
+    canny_low = st.slider("Rim edge lower threshold", 0, 254, saved_configuration.get("canny_low", defaults.canny_low), key="det_canny_low")
+    canny_high = st.slider("Rim edge upper threshold", 1, 255, saved_configuration.get("canny_high", defaults.canny_high), key="det_canny_high")
+    st.subheader("White-region fallback")
     rgb_sum_min = st.slider(
-        "Minimum R + G + B", 0, 765, 160, 1,
+        "Minimum R + G + B", 0, 765, saved_configuration.get("rgb_sum_min", defaults.rgb_sum_min), 1, key="det_rgb_sum_min",
         help="Require R + G + B to reach this value. Lower to include white discs in shadow.",
     )
     channel_difference_max = st.slider(
-        "Maximum channel difference", 0, 255, 55, 1,
+        "Maximum channel difference", 0, 255, saved_configuration.get("channel_difference_max", defaults.channel_difference_max), 1, key="det_channel_difference_max",
         help="Require max(R, G, B) − min(R, G, B) to stay below this value. This limits every pairwise channel difference; lower to reject tinted objects.",
     )
-    min_white_fraction = st.slider("Minimum white fill fraction", 0.20, 0.95, 0.48, 0.05)
-    with st.expander("White size and shape tuning"):
-        min_radius = st.slider("Minimum approximate radius (px)", 4, 100, 12)
-        max_radius = st.slider("Maximum approximate radius (px)", min_radius + 1, 260, 120)
-        min_ellipse_ratio = st.slider("Minimum ellipse aspect ratio", 0.10, 0.95, 0.28, 0.05)
-        min_area = st.slider("Minimum white shape area (px²)", 25, 4000, 150, 25)
+    min_white_fraction = st.number_input("Minimum white fill fraction", min_value=0.000001, max_value=1.0, value=saved_configuration.get("min_white_fraction", defaults.min_white_fraction), step=0.01, format="%.4f", key="det_min_white_fraction")
+    with st.expander("Ellipse size and shape tuning"):
+        min_radius = st.number_input("Minimum approximate radius (px)", min_value=1, value=saved_configuration.get("min_radius", defaults.min_radius), step=1, key="det_min_radius")
+        max_radius = st.number_input("Maximum approximate radius (px)", min_value=2, value=saved_configuration.get("max_radius", defaults.max_radius), step=1, key="det_max_radius")
+        min_ellipse_ratio = st.number_input("Minimum ellipse aspect ratio", min_value=0.000001, max_value=1.0, value=saved_configuration.get("min_ellipse_ratio", defaults.min_ellipse_ratio), step=0.01, format="%.4f", key="det_min_ellipse_ratio")
+        min_area = st.number_input("Minimum contour area (px²)", min_value=1, value=saved_configuration.get("min_area", defaults.min_area), step=1, key="det_min_area")
+
+if canny_low >= canny_high or min_radius >= max_radius:
+    st.error("Lower rim threshold and minimum radius must be below their corresponding upper values.")
+    st.stop()
 
 cfg = DetectorSettings(
+    canny_low=canny_low, canny_high=canny_high,
     processing_width=processing_width,
     rgb_sum_min=rgb_sum_min,
     channel_difference_max=channel_difference_max,
@@ -119,13 +180,13 @@ cfg = DetectorSettings(
 )
 
 st.title("🥏 Ground Frisbee Finder")
-st.write("Find white frisbee-shaped regions with classical computer vision.")
+st.write("Find frisbee rims and elliptical discs with classical computer vision, then measure their average R+G+B.")
 st.caption(f"Processing at {processing_width}×{processing_width * 3 // 4} landscape, with dimensions swapped for portrait and padding to preserve proportions. Pixel radius/area limits apply at this size.")
 
 detection_tab, position_tab = st.tabs(["Detection", "Ground position"])
 # Render the independent dashboard before the existing detector's early stops.
 with position_tab:
-    render_ground_position(cfg)
+    render_ground_position(cfg, saved_configuration=saved_configuration)
 
 with detection_tab:
     source = st.radio(
@@ -151,10 +212,11 @@ with detection_tab:
         with st.form("camera_connection_form"):
             camera_url = st.text_input(
                 "Direct stream URL (including camera IP, port and path)",
+                value=saved_configuration.get("url", ""), key="live_cfg_url",
                 placeholder="http://192.168.1.50:8080/?action=stream",
                 help="Examples: http://IP:8080/?action=stream | http://IP:8080/stream.mjpg | rtsp://IP:8554/cam",
             )
-            camera_mode = st.selectbox("Stream format", STREAM_MODES)
+            camera_mode = st.selectbox("Stream format", STREAM_MODES, index=int(saved_configuration.get("snapshot", False)), key="live_cfg_mode")
             connect = st.form_submit_button("▶ Connect / reconnect", use_container_width=True)
         if connect:
             old_camera = st.session_state.pop("camera_reader", None)
@@ -194,21 +256,24 @@ with detection_tab:
                     st.warning(f"Last frame was {latest.age_seconds:.1f} s ago. {latest.status}. {latest.error or ''}")
                 height, width = latest.frame.shape[:2]
                 frame_now = prepare_frame(latest.frame, cfg.processing_width)
-                cache_key = (id(camera), latest.sequence, cfg)
+                cache_key = (id(camera), latest.sequence, cfg, RGB_MEAN_RADIUS_SCALE)
                 cached = st.session_state.get("last_live_result")
-                if cached is not None and cached["key"] == cache_key:
+                if cached is not None and cached["key"] == cache_key and "candidates" in cached:
+                    candidates_now = cached["candidates"]
                     annotated_now, debug_now, count, detection_ms = (
                         cached["annotated"], cached["debug"], cached["count"], cached["elapsed_ms"]
                     )
                 else:
                     started = time.perf_counter()
                     hits, debug_now = detect(frame_now, cfg)
+                    candidates_now = hits
                     detection_ms = (time.perf_counter() - started) * 1000
                     annotated_now = draw_detections(frame_now, hits, cfg)
                     count = len(hits)
                     st.session_state["last_live_result"] = {
                         "key": cache_key, "annotated": annotated_now, "debug": debug_now,
                         "count": count, "elapsed_ms": detection_ms,
+                        "candidates": candidates_now,
                     }
                 a, b, c, d = st.columns(4)
                 a.metric("Candidates", count)
@@ -228,10 +293,12 @@ with detection_tab:
                     f"{latest.status} · newest frame age: {latest.age_seconds or 0:.2f}s. "
                     "Scores are heuristic shape matches, not calibrated classification probabilities."
                 )
+                show_candidate_details(candidates_now)
                 if show_debug:
-                    debug_cols = st.columns(2)
+                    debug_cols = st.columns(3)
                     debug_cols[0].image(debug_now["threshold_mask"], caption="RGB threshold mask", use_container_width=True)
                     debug_cols[1].image(debug_now["white_mask"], caption="Cleaned mask used by white detector", use_container_width=True)
+                    debug_cols[2].image(debug_now["edge_mask"], caption="Rim edges used for ellipse fitting", use_container_width=True)
 
             render_live_feed()
         st.stop()
@@ -327,33 +394,23 @@ with detection_tab:
         st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
 
     st.caption(f"{frame_description} · detection frame {frame.shape[1]}×{frame.shape[0]}")
-    st.subheader("Candidate details")
-    if candidates:
-        st.dataframe([
-            {
-                "#": i,
-                "Found by": c.method,
-                "Center X": c.center[0], "Center Y": c.center[1],
-                "Axis X (px)": c.axes[0], "Axis Y (px)": c.axes[1],
-                "Match score (heuristic)": round(c.score, 3),
-            }
-            for i, c in enumerate(candidates, start=1)
-        ], hide_index=True, use_container_width=True)
-    else:
-        st.info("No candidate meets the current settings. Adjust the white thresholds or size limits.")
+    show_candidate_details(candidates)
 
-    with st.expander("Debug views: RGB threshold and cleaned mask", expanded=True):
-        st.caption("Pixels pass when R + G + B ≥ the minimum AND max(R,G,B) − min(R,G,B) ≤ the maximum difference. The ellipse detector uses the cleaned mask.")
-        c1, c2 = st.columns(2)
+    with st.expander("Debug views: rim edges and white masks", expanded=True):
+        st.caption("Rim ellipses use image edges independently of interior color. The white-region fallback uses the RGB threshold and cleaned mask.")
+        c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("**RGB threshold mask**")
             st.image(debug["threshold_mask"], clamp=True, use_container_width=True)
         with c2:
             st.markdown("**Cleaned detection mask**")
             st.image(debug["white_mask"], clamp=True, use_container_width=True)
+        with c3:
+            st.markdown("**Rim edges**")
+            st.image(debug["edge_mask"], clamp=True, use_container_width=True)
 
     ok, png = cv2.imencode(".png", annotated)
     if ok:
         st.download_button("Download annotated image", png.tobytes(), "ground_frisbee_result.png", "image/png")
 
-    st.caption("Limit: white ellipses such as plates, markings and lids may trigger; the detector cannot verify physical contact with the ground.")
+    st.caption("Limit: other elliptical rims, plates, markings and lids may trigger; shape alone cannot identify a frisbee or verify contact with the ground.")

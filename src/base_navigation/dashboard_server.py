@@ -10,9 +10,11 @@ import cv2
 if __package__:
     from .config import SETTINGS_FIELDS, DEFAULT_SETTINGS_FILE, validate_settings, load_settings, save_settings
     from .web_control import WebRobotControl
+    from .calibration import camera_pose
 else:
     from config import SETTINGS_FIELDS, DEFAULT_SETTINGS_FILE, validate_settings, load_settings, save_settings
     from web_control import WebRobotControl
+    from calibration import camera_pose
 
 
 class DashboardServer:
@@ -21,6 +23,7 @@ class DashboardServer:
         self._jpeg = None
         self._lock = Lock()
         self._settings = {name: getattr(settings, name) for name in SETTINGS_FIELDS} if settings else {}
+        self._applied_settings = self._settings.copy()
         self._settings_file = Path(getattr(settings, "settings_file", DEFAULT_SETTINGS_FILE))
         self._settings_port = getattr(settings, "port", port)
         self._pending = ("connect", settings) if settings and settings.url else None
@@ -32,12 +35,27 @@ class DashboardServer:
                 if path == "/":
                     content = Path(__file__).with_name("dashboard.html").read_bytes()
                     content_type = "text/html; charset=utf-8"
+                elif path == "/ultrasound_view.js":
+                    content = Path(__file__).with_name("ultrasound_view.js").read_bytes()
+                    content_type = "text/javascript; charset=utf-8"
                 elif path == "/settings":
                     with view._lock:
                         content = json.dumps(view._settings, allow_nan=False).encode()
                     content_type = "application/json"
+                elif path == "/settings/saved":
+                    try:
+                        with view._lock:
+                            saved = load_settings(view._settings_file)
+                        content = json.dumps(vars(saved), allow_nan=False).encode()
+                    except (OSError, ValueError, TypeError, OverflowError) as exc:
+                        self.reply_json(500, {"error": f"Could not read saved settings: {exc}"})
+                        return
+                    content_type = "application/json"
                 elif path == "/robot/status":
-                    content = json.dumps(view.robot_control.status(), allow_nan=False).encode()
+                    status = view.robot_control.status()
+                    with view._lock:
+                        status["camera_pose"] = camera_pose(view._applied_settings, status)
+                    content = json.dumps(status, allow_nan=False).encode()
                     content_type = "application/json"
                 elif path == "/frame.jpg":
                     with view._lock:
@@ -66,8 +84,11 @@ class DashboardServer:
                     "/robot/stop": view.robot_control.stop,
                     "/robot/disconnect": view.robot_control.disconnect,
                     "/robot/heartbeat": view.robot_control.heartbeat,
+                    "/robot/avoidance": view.robot_control.configure_avoidance,
                     "/robot/lift/up": lambda **kw: view.robot_control.jog_lift("up", **kw),
                     "/robot/lift/down": lambda **kw: view.robot_control.jog_lift("down", **kw),
+                    "/robot/head/up": lambda **kw: view.robot_control.jog_head("up", **kw),
+                    "/robot/head/down": lambda **kw: view.robot_control.jog_head("down", **kw),
                 }
                 if self.path in robot_actions:
                     # Only the local JSON UI may arm motion; reject cross-site forms.
@@ -78,11 +99,11 @@ class DashboardServer:
                     if self.headers.get_content_type() != "application/json":
                         self.reply_json(415, {"error": "Robot commands require application/json"})
                         return
-                    requires_generation = self.path == "/robot/start" or self.path.startswith("/robot/lift/")
+                    requires_generation = self.path in ("/robot/start", "/robot/avoidance") or self.path.startswith(("/robot/lift/", "/robot/head/"))
                     if requires_generation:
                         try:
                             length = int(self.headers.get("Content-Length", "0"))
-                            if not 0 < length <= 512:
+                            if not 0 < length <= (8192 if self.path == '/robot/avoidance' else 512):
                                 raise ValueError("Motion commands require a current generation token")
                             data = json.loads(self.rfile.read(length))
                             generation = data.get("generation") if isinstance(data, dict) else None
@@ -92,8 +113,12 @@ class DashboardServer:
                             self.reply_json(400, {"error": str(exc)})
                             return
                     try:
-                        message = (robot_actions[self.path](expected_generation=generation)
-                                   if requires_generation else robot_actions[self.path]())
+                        if self.path == '/robot/avoidance':
+                            message = view.robot_control.configure_avoidance(
+                                data.get('enabled'), data.get('mapping'), expected_generation=generation)
+                        else:
+                            message = (robot_actions[self.path](expected_generation=generation)
+                                       if requires_generation else robot_actions[self.path]())
                     except ValueError as exc:
                         self.reply_json(409, {"error": str(exc)})
                         return
@@ -130,21 +155,23 @@ class DashboardServer:
                 except (ValueError, TypeError, OverflowError) as exc:
                     self.reply_json(400, {"error": str(exc)})
                     return
-                if saving:
-                    try:
-                        with view._lock:
-                            port = view._settings_port
-                        save_settings(view._settings_file, vars(settings), port=port)
-                    except OSError as exc:
-                        self.reply_json(500, {"error": f"Could not save settings: {exc}"})
-                        return
-                    self.reply_json(200, {"message": "Settings saved to JSON. Click Connect / apply settings to use them."})
+                try:
+                    # Keep disk and the browser's next GET /settings in sync.
+                    # A failed save must leave the running camera unchanged.
+                    with view._lock:
+                        save_settings(view._settings_file, vars(settings), port=view._settings_port)
+                        view._settings = vars(settings).copy()
+                        if not saving:
+                            view._applied_settings = vars(settings).copy()
+                            view._pending = ("connect", settings)
+                except OSError as exc:
+                    self.reply_json(500, {"error": f"Could not save settings; camera settings unchanged: {exc}"})
                     return
-                with view._lock:
-                    view._settings = vars(settings).copy()
-                    view._pending = ("connect", settings)
+                if saving:
+                    self.reply_json(200, {"message": "Settings saved, including robot lift and camera tilt. Use Save & apply settings to apply them."})
+                    return
                 view.robot_control.clear_target("Camera settings changed; navigation stopped")
-                self.reply_json(200, {"message": "Settings accepted; connecting camera"})
+                self.reply_json(200, {"message": "Settings saved; applying calibration and connecting camera"})
 
             def reply_json(self, status, data):
                 body = json.dumps(data).encode()

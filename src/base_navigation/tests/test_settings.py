@@ -9,6 +9,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "perception"))
@@ -20,6 +22,8 @@ from dashboard_server import DashboardServer
 
 def sample_values(**changes):
     values = {
+        "canny_low": 40, "canny_high": 120,
+        "camera_base_height": 0.83,
         "url": "http://127.0.0.1:8080/camera.jpg",
         "snapshot": True,
         "robot_z": 0.22,
@@ -29,6 +33,11 @@ def sample_values(**changes):
         "resolution": 480,
         "rgb_sum_min": 160,
         "channel_difference_max": 55,
+        "min_radius": 12,
+        "max_radius": 100,
+        "min_ellipse_ratio": 0.4,
+        "min_area": 180,
+        "min_white_fraction": 0.55,
         "angular_kp": 0.9,
         "linear_kp": 0.3,
         "max_angular_speed": 0.35,
@@ -62,11 +71,13 @@ class SettingsFileTests(unittest.TestCase):
         args = parse_args([
             "--settings-file", str(self.path), "http://127.0.0.1:8081/stream",
             "--no-snapshot", "--rgb-sum-min", "190", "--linear-kp", "0.5",
+            "--target-distance", "0.3",
         ], dashboard=True)
         self.assertEqual((args.url, args.snapshot, args.rgb_sum_min, args.linear_kp),
                          ("http://127.0.0.1:8081/stream", False, 190, 0.5))
         self.assertEqual((args.channel_difference_max, args.robot_z, args.port),
                          (55, 0.22, 8877))
+        self.assertEqual(args.target_distance, 0.3)
         self.assertEqual(json.loads(self.path.read_text()), values | {"port": 8877})
 
     def test_blank_camera_url_can_be_saved_but_cannot_start_navigation(self):
@@ -109,13 +120,71 @@ class SettingsFileTests(unittest.TestCase):
         before = self.path.read_bytes()
         for changes in ({"rgb_sum_min": 766}, {"channel_difference_max": -1},
                         {"linear_kp": float("nan")}, {"snapshot": "yes"},
-                        {"horizontal_fov": 180}, {"url": "not-a-camera-url"}):
+                        {"horizontal_fov": 180}, {"url": "not-a-camera-url"},
+                        {"min_radius": 100}, {"min_radius": 1.5}, {"max_radius": 0},
+                        {"min_area": 0}, {"min_ellipse_ratio": float("nan")},
+                        {"min_ellipse_ratio": 0}, {"min_white_fraction": 1.1},
+                        {"canny_low": 150}, {"canny_high": 20}, {"canny_high": 256}):
             with self.subTest(changes=changes), self.assertRaises((ValueError, TypeError, OverflowError)):
                 save_settings(self.path, values | changes)
             self.assertEqual(self.path.read_bytes(), before)
 
+    def test_atomic_save_preserves_existing_file_permissions(self):
+        save_settings(self.path, sample_values())
+        self.path.chmod(0o640)
+        save_settings(self.path, sample_values(robot_z=0.37, tilt_rad=0.72))
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o640)
+
+    def test_cross_user_atomic_save_cannot_replace_file_with_inaccessible_owner(self):
+        save_settings(self.path, sample_values())
+        before = self.path.read_bytes()
+        original_stat = self.path.stat()
+        with patch('config.os.fstat', return_value=SimpleNamespace(
+                st_uid=original_stat.st_uid + 1, st_gid=original_stat.st_gid)), \
+             patch('config.os.fchown', side_effect=PermissionError('different user')):
+            with self.assertRaisesRegex(PermissionError, 'existing configuration was left unchanged'):
+                save_settings(self.path, sample_values(tilt_rad=0.9))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.path.stat().st_uid, original_stat.st_uid)
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_legacy_settings_keep_detector_defaults_without_rewriting_file(self):
+        from detector import DetectorSettings
+        names = ('min_radius', 'max_radius', 'min_ellipse_ratio', 'min_area', 'min_white_fraction')
+        legacy = {k: v for k, v in sample_values().items() if k not in (*names, 'camera_base_height', 'canny_low', 'canny_high')}
+        legacy['port'] = 8765
+        self.path.write_text(json.dumps(legacy))
+        before = self.path.read_bytes()
+        loaded = load_settings(self.path)
+        self.assertEqual(loaded.camera_base_height, 0.83)
+        self.assertEqual((loaded.canny_low, loaded.canny_high), (40, 120))
+        for name in names:
+            self.assertEqual(getattr(loaded, name), getattr(DetectorSettings(), name))
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_ellipse_settings_change_camera_detection(self):
+        import cv2
+        import numpy as np
+        from camera import create_camera
+        image = np.full((480, 640, 3), (20, 100, 20), np.uint8)
+        cv2.ellipse(image, (320, 240), (40, 14), 20, 0, 360, (240, 240, 240), -1)
+        for ratio, detected in ((0.7, False), (0.2, True)):
+            values = sample_values(resolution=640, min_ellipse_ratio=ratio)
+            camera = create_camera(validate_settings(values))
+            try:
+                self.assertEqual(camera.detect_center(image) is not None, detected)
+            finally:
+                camera.close()
+
 
 class BrowserSettingsPersistenceTests(unittest.TestCase):
+    def test_saved_endpoint_reads_disk_instead_of_cached_form_values(self):
+        changed = sample_values(tilt_rad=0.9, camera_base_height=1.1, canny_low=55, canny_high=160)
+        save_settings(self.path, changed, port=8877)
+        self.assertEqual(self.get_current(), self.original)
+        with urlopen(self.display.url + '/settings/saved', timeout=2) as response:
+            self.assertEqual(json.load(response), changed | {'port': 8877})
+
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -139,18 +208,61 @@ class BrowserSettingsPersistenceTests(unittest.TestCase):
     def test_save_then_reload_restores_form_values_without_applying_camera(self):
         changed = sample_values(url="http://127.0.0.1:8082/other.jpg", robot_z=0.5,
                                 rgb_sum_min=190, channel_difference_max=65,
-                                max_linear_speed=0.08)
+                                tilt_rad=0.73, max_linear_speed=0.08, target_distance=0.3, min_radius=15, max_radius=120,
+                                min_ellipse_ratio=0.28, min_area=220, min_white_fraction=0.6)
         self.post("/settings/save", changed)
         self.assertEqual(json.loads(self.path.read_text()), changed | {"port": 8877})
-        self.assertEqual(self.get_current(), self.original)
+        self.assertEqual(self.get_current(), changed)
         # Saving must not replace or consume the startup connection request.
         action, pending = self.display.take_update()
         self.assertEqual((action, pending.url), ("connect", self.original["url"]))
         self.assertIsNone(self.display.take_update())
 
+        with urlopen(self.display.url + '/settings/saved', timeout=2) as response:
+            self.assertEqual(json.load(response), changed | {'port': 8877})
+
         restored = self.post("/settings/reload", {})
         self.assertEqual(restored["settings"], changed)
         self.assertEqual(self.get_current(), changed)
+        self.assertIsNone(self.display.take_update())
+
+    def test_apply_persists_height_and_tilt_for_browser_refresh_and_restart(self):
+        changed = sample_values(robot_z=0.37, tilt_rad=0.82, camera_base_height=0.95)
+        self.display.take_update()
+        self.post('/settings', changed)
+        self.assertEqual(self.get_current(), changed)
+        action, applied = self.display.take_update()
+        self.assertEqual(action, 'connect')
+        self.assertEqual((applied.robot_z, applied.tilt_rad), (0.37, 0.82))
+        restarted = parse_args(['--settings-file', str(self.path)], dashboard=True)
+        self.assertEqual((restarted.robot_z, restarted.tilt_rad), (0.37, 0.82))
+        self.assertEqual(restarted.camera_base_height, 0.95)
+
+    def test_live_pose_uses_applied_offsets_not_unapplied_saved_values(self):
+        feedback = {'lift_fresh': True, 'lift_position': 0.2,
+                    'head_fresh': True, 'head_pitch': 0.3}
+        changed = sample_values(camera_base_height=1.1, robot_z=0.1, tilt_rad=0.2)
+        with patch.object(self.display.robot_control, 'status', return_value=feedback):
+            self.post('/settings/save', changed)
+            with urlopen(self.display.url + '/robot/status', timeout=2) as response:
+                pose = json.load(response)['camera_pose']
+            self.assertAlmostEqual(pose['height'], 0.83 + 0.22 + 0.2)
+            self.assertAlmostEqual(pose['tilt'], 0.4 + 0.3)
+            self.post('/settings', changed)
+            with urlopen(self.display.url + '/robot/status', timeout=2) as response:
+                pose = json.load(response)['camera_pose']
+            self.assertAlmostEqual(pose['height'], 1.4)
+            self.assertAlmostEqual(pose['tilt'], 0.5)
+
+    def test_failed_apply_does_not_change_form_file_or_camera(self):
+        self.display.take_update()
+        before = self.path.read_bytes()
+        with patch('dashboard_server.save_settings', side_effect=PermissionError('read-only settings')):
+            with self.assertRaises(HTTPError) as error:
+                self.post('/settings', sample_values(robot_z=0.37, tilt_rad=0.82))
+        self.assertEqual(error.exception.code, 500)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.get_current(), self.original)
         self.assertIsNone(self.display.take_update())
 
     def test_invalid_save_or_reload_preserves_form_file_and_pending_connection(self):

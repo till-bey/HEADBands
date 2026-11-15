@@ -1,14 +1,40 @@
 # 🥏 Part 1: Ground Frisbee Finder
 
-A small **Streamlit website** to detect **white, roughly circular / elliptical frisbee-like shapes on the ground** with classical OpenCV. **No dataset, training, API key or GPU required.** It can run on a CPU.
+A small **Streamlit website** to detect **frisbee rims and circular / elliptical discs** with classical OpenCV and measure their interior brightness. **No dataset, training, API key or GPU required.** It can run on a CPU.
 
 ## Start the website
 
 ```bash
-uv run streamlit run website/app.py   # from perception/; uv creates .venv from pyproject.toml
+# From the repository root:
+uv run --project perception streamlit run perception/website/app.py
+
+# Or from perception/:
+uv run streamlit run website/app.py
 ```
 
 Open the address printed in the terminal (normally `http://localhost:8501`).
+Imports and dataset paths are resolved relative to the app, independent of the
+terminal's working directory. `uv` creates the environment from `perception/pyproject.toml`.
+
+### Use the navigation dashboard's saved configuration
+
+On startup, Streamlit reads `src/base_navigation/settings.json`, using the same
+validation and legacy defaults as the navigation dashboard. It initializes the
+detector resolution, rim thresholds, RGB thresholds, ellipse limits, camera URL
+and stream format, mounting height/tilt offsets, base height, and FOV from that file.
+**Reload saved configuration** in the sidebar picks up changes saved from the
+other dashboard. Streamlit controls remain available for temporary tuning and do
+not write back to the controller's configuration.
+
+Under **Configuration source**, select a different settings file or navigation
+dashboard URL if needed. If the default file belongs to another OS user, Streamlit
+can read its saved contents through the running dashboard's read-only
+`/settings/saved` endpoint (default `http://127.0.0.1:8765`). Restart the navigation
+dashboard after updating this code to expose that endpoint. Read failures produce
+a visible warning; a failed reload keeps the last successfully loaded values.
+Reconnect cameras after reloading a changed URL or format. Live ROS body/head
+feedback is not stored in the settings file; ground-position controls show the
+saved mounting calibration, which can be adjusted for offline visualization.
 
 Website inputs, live camera frames, and webcam/video CLI frames use a selectable processing resolution: **320×240, 480×360, 640×480 (default), 960×720, or 1280×960** in landscape, with dimensions swapped for portrait. Notebook inputs keep the 640×480 default unless a width is passed to `prepare_frame`. Other aspect ratios receive black padding to preserve shapes. Displayed coordinates, shape thresholds, annotations, and downloads use this processing resolution. Original files are unchanged.
 
@@ -16,7 +42,15 @@ Website inputs, live camera frames, and webcam/video CLI frames use a selectable
 
 Use **Processing resolution** in the sidebar to reduce the image size. Try **320×240** first: it has one quarter as many pixels as 640×480, but may miss distant discs. Radius and area thresholds are in processing pixels and are not scaled automatically; halve radius limits and quarter area limits when halving the resolution. Narrow the radius range to the sizes you expect.
 
-The detector fits contour ellipses to white regions across the full image. Radius, area, aspect ratio, and white fill limits control which candidates are retained.
+The detector fits ellipses to Canny rim edges across the full image, with a white-region fallback. Rim detection does not require a white interior. Radius, area, aspect ratio, contour fit and perimeter coverage reject unsuitable candidates. White fill applies to the fallback pass.
+
+**Mean R+G+B (0–765)** is shown in the candidate table and image annotations for
+images, selected video frames, and live camera feeds. It is the mean of each
+pixel's R+G+B within an inner ellipse whose two radii are 75% of the fitted
+ellipse's radii (56.25% of its geometric area), excluding the outer rim. Dark
+markings and non-white pixels in this inner region are included. It is measured
+before annotations, rather than using only white-threshold pixels.
+The live-frame cache retains the measurements alongside the detections.
 
 RGB preprocessing uses OpenCV channel operations, and ellipse validation scans candidate patches instead of full-image masks. The live Detection dashboard reuses results for unchanged frames/settings. Its UI still refreshes up to about 7 times per second, independently of detector processing speed.
 
@@ -37,12 +71,17 @@ settings = DetectorSettings(processing_width=320,
 # Direct frame preprocessing: prepare_frame(frame, processing_width=320).
 ```
 
-The detector first thresholds the resized image using two conditions, both required:
+For rim detection, **Rim edge lower threshold** and **Rim edge upper threshold**
+control Canny sensitivity. Reduce the minimum ellipse aspect ratio for thin,
+tilted side views. Nested inner/outer rim contours are merged into one detection,
+keeping the outer fitted ellipse.
+
+The white-region fallback thresholds the resized image using two conditions, both required:
 
 - **R + G + B ≥ minimum sum** (0–765; default 160).
 - **max(R,G,B) − min(R,G,B) ≤ maximum channel difference** (0–255; default 55). This bounds every pairwise channel difference.
 
-It searches the entire image, cleans the binary mask with a 3×3 opening and 5×5 closing, then fits contour ellipses. Geometry, size, aspect ratio, and white fill checks reject unsuitable candidates. There is no edge-detection stage.
+The fallback cleans the binary mask with a 3×3 opening and 5×5 closing before fitting ellipses. The debug views show rim edges, the RGB threshold mask, and the cleaned white mask.
 
 The app supports local `Dataset/Images` and `Dataset/Videos` folders (including subfolders), included synthetic samples, image/video uploads, camera snapshots, and precise frame-by-frame video navigation. It displays original/annotated images, raw/cleaned white masks, a heuristic match score, and result downloads.
 
@@ -176,11 +215,11 @@ print(position)
 3. **Shape:** increase minimum aspect ratio to filter long bright lines; reduce it for edge-on discs.
 4. **Radii:** adjust for expected frisbee sizes in the resized images.
 
-The debug views show the **RGB threshold mask** before cleanup and the **cleaned detection mask** used to fit ellipses. The notebook compares channel-difference limits.
+The debug views show **Rim edges**, the **RGB threshold mask** before cleanup, and the **cleaned detection mask** used by the white-region fallback. The notebook compares channel-difference limits.
 
 ## Limitations / interpreting the results
 
-- This is **not a trained image classifier**. It outputs *white, frisbee-like candidates*, not definitive frisbee labels.
+- This is **not a trained image classifier**. It outputs *elliptical rim/disc candidates*, not definitive frisbee labels.
 - The detection scores are simple heuristics **not calibrated probabilities**.
 - White plates, lids, field markings, bright patches, and similarly shaped objects can trigger false positives.
 - It does **not** independently establish that an object actually touches the ground.
