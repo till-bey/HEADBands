@@ -152,9 +152,9 @@ PICKUP_PAUSE_S = 1.0  # held between key poses
 # As the working `pickup scrape_sequence --body-height 0.6 --lower-body-height 0.2 --scrape-grip 0.5
 # --gripper-close-seconds 0.5 --time-scale 2.0 --between-delay 1.0` (fa21e94):
 PICKUP_START_LIFT_M = 0.6  # lift for pose 1; the arms wait until it is there
-PICKUP_LIFT_M = 0.2  # lift once pose 1 is reached, for the rest
+PICKUP_LIFT_M = 0.19  # lift once pose 1 is reached, for the rest
 PICKUP_SCRAPE_GRIP = 0.5  # right gripper after the scrape (pose 3)
-PICKUP_CLOSE_S = 0.5  # then closed in a ramp over this long, once the move away (pose 4) is reached
+PICKUP_CLOSE_S = 0.5  # then closed in a ramp over this long, starting with the move away (pose 4)
 PICKUP_GRIPPER_VEL = 0.5  # gripper velocity for the pickup's commands, as pickup.py
 
 PANTHER_COMMAND_TOPICS: tuple[str, ...] = (

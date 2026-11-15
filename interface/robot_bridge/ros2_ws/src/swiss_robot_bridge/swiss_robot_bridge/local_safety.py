@@ -204,8 +204,9 @@ def pickup_points() -> list[tuple[float, tuple[float, ...], float | None]]:
     """The disk pickup on PICKUP_JOINTS, as the working `pickup scrape_sequence`: each key pose reached, then held
     PICKUP_PAUSE_S. Grippers open and the lift lowered to PICKUP_LIFT_M once pose 1 is reached (the plan sends the
     lift to PICKUP_START_LIFT_M first), right gripper to PICKUP_SCRAPE_GRIP at pose 3, then closed in a
-    PICKUP_CLOSE_S ramp (0.05 s steps) once pose 4 is reached."""
-    rf = [0.0, 0.0, PICKUP_SCRAPE_GRIP, PICKUP_SCRAPE_GRIP]  # right gripper on reaching each pose
+    PICKUP_CLOSE_S ramp (0.05 s steps) starting with the move to pose 4. The ramp's points lie on the straight
+    line pose 3 -> pose 4, so with position-only points the arms' path is unchanged."""
+    rf = [0.0, 0.0, PICKUP_SCRAPE_GRIP, GRIPPER_CLOSED_POS]  # right gripper on reaching each pose
     pts: list[tuple[float, tuple[float, ...], float | None]] = []
     t = PICKUP_PHASE_S  # the first move is timed from the arm's actual pose by retime_from_current_pose
     for i, q in enumerate(PICKUP_POSES):
@@ -213,12 +214,16 @@ def pickup_points() -> list[tuple[float, tuple[float, ...], float | None]]:
             prev = PICKUP_POSES[i - 1]
             t += PICKUP_PAUSE_S
             pts.append((round(t, 4), prev + (0.0, rf[i - 1], PICKUP_LIFT_M), None))
-            t += max(PICKUP_PHASE_S, max(abs(a - b) for a, b in zip(q, prev)) / (MAX_ARM_JOINT_VEL_RPS * 0.9))
+            move = max(PICKUP_PHASE_S, max(abs(a - b) for a, b in zip(q, prev)) / (MAX_ARM_JOINT_VEL_RPS * 0.9))
+            if i == 3:  # the close, as the move away starts
+                n = max(1, round(PICKUP_CLOSE_S / 0.05))
+                for k in range(1, n + 1):
+                    s = PICKUP_CLOSE_S * k / n
+                    g = PICKUP_SCRAPE_GRIP + (GRIPPER_CLOSED_POS - PICKUP_SCRAPE_GRIP) * k / n
+                    arm = tuple(a + (b - a) * s / move for a, b in zip(prev, q))
+                    pts.append((round(t + s, 4), arm + (0.0, g, PICKUP_LIFT_M), None))
+            t += move
         pts.append((round(t, 4), q + (0.0, rf[i], PICKUP_LIFT_M), None))
-    n = max(1, round(PICKUP_CLOSE_S / 0.05))
-    for k in range(1, n + 1):  # the close, the arms holding pose 4
-        g = PICKUP_SCRAPE_GRIP + (GRIPPER_CLOSED_POS - PICKUP_SCRAPE_GRIP) * k / n
-        pts.append((round(t + PICKUP_CLOSE_S * k / n, 4), PICKUP_POSES[3] + (0.0, g, PICKUP_LIFT_M), None))
     return pts
 
 

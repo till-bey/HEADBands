@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Disk pickup from the floor: plays the joint-space key poses motion/pickup/key_points/1.txt..4.txt on both arms.
 
-Lift at --body-height (0.6 m) for 1 prepare position (grippers open), then --lower-body-height (0.2 m); 2 prepare;
-3 scrape, right gripper to --scrape-grip; 4 move away, then the right gripper closed over --gripper-close-seconds. The web interface plays the same sequence through the bridge
+Lift at --body-height (0.6 m) for 1 prepare position (grippers open), then --lower-body-height (0.19 m); 2 prepare;
+3 scrape, right gripper to --scrape-grip; 4 move away, the right gripper closing over --gripper-close-seconds as it starts. The web interface plays the same sequence through the bridge
 ("pick up the disk"; swiss_robot_bridge.local_safety.pickup_points).
 """
 
@@ -127,7 +127,7 @@ def make_goal(names: list[str], positions: np.ndarray, seconds: float) -> Follow
     return goal
 
 
-def run_dual_goals(node, clients, goals) -> None:
+def run_dual_goals(node, clients, goals, during=None) -> None:
     if not all(client.wait_for_server(timeout_sec=5.0) for client in clients):
         raise RuntimeError("arm trajectory action servers unavailable")
     sent = [client.send_goal_async(goal) for client, goal in zip(clients, goals)]
@@ -136,6 +136,8 @@ def run_dual_goals(node, clients, goals) -> None:
     handles = [future.result() for future in sent]
     if any(h is None or not h.accepted for h in handles):
         raise RuntimeError("pickup trajectory goal rejected")
+    if during is not None:
+        during()  # runs while the arms move
     results = [h.get_result_async() for h in handles]
     for future in results:
         rclpy.spin_until_future_complete(node, future)
@@ -148,9 +150,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--key-point-dir", type=Path, default=DEFAULT_KEY_POINT_DIR)
     parser.add_argument("--body-height", type=float, default=0.6, help="lift height for the first pose (m)")
-    parser.add_argument("--lower-body-height", type=float, default=0.2, help="lift height after the first pose (m)")
+    parser.add_argument("--lower-body-height", type=float, default=0.19, help="lift height after the first pose (m)")
     parser.add_argument("--scrape-grip", type=float, default=0.5, help="right gripper after the scrape (0 open..1 closed)")
-    parser.add_argument("--gripper-close-seconds", type=float, default=0.5, help="right gripper close ramp after the move away")
+    parser.add_argument("--gripper-close-seconds", type=float, default=0.5, help="right gripper close ramp as the move away starts")
     parser.add_argument("--phase-seconds", type=float, default=8.0, help="time per key pose")
     parser.add_argument("--between-delay", type=float, default=1.0, help="pause between key poses (s)")
     parser.add_argument("--dry-run", action="store_true", help="load and check the key poses, do not move")
@@ -190,15 +192,18 @@ def main() -> None:
         for index, (name, joints) in enumerate(zip(PHASES, poses)):
             if index:
                 spin_for(node, args.between_delay)
-            run_dual_goals(node, clients, [make_goal(c.names, q, args.phase_seconds) for c, q in zip(chains, joints)])
+            close = None
+            if index == 3:
+                def close():  # gentle close as the move away starts
+                    for value in np.linspace(args.scrape_grip, 1.0, max(2, round(args.gripper_close_seconds / 0.05))):
+                        publish_gripper(node, RIGHT_GRIPPER_CMD_TOPIC, value)
+                        spin_for(node, 0.05)
+            run_dual_goals(node, clients, [make_goal(c.names, q, args.phase_seconds) for c, q in zip(chains, joints)], close)
             print(f"{name} reached")
             if index == 0:
                 publish_lift(node, args.lower_body_height)
             elif index == 2:
                 publish_gripper(node, RIGHT_GRIPPER_CMD_TOPIC, args.scrape_grip)
-        for value in np.linspace(args.scrape_grip, 1.0, max(2, round(args.gripper_close_seconds / 0.05))):
-            publish_gripper(node, RIGHT_GRIPPER_CMD_TOPIC, value)  # gentle close, once moved away
-            spin_for(node, 0.05)
         print("pickup complete: right gripper closed")
     finally:
         switch_controllers(node, [FORWARD], [LEFT_TRAJ, RIGHT_TRAJ])

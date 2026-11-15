@@ -54,9 +54,10 @@ def test_bridge_plays_the_key_poses_safely() -> None:
     for _, q, _ in pts:
         assert all(ARM_JOINT_LIMITS[n][0] <= v <= ARM_JOINT_LIMITS[n][1] for n, v in zip(arms, q))
     rf = [dict(zip(PICKUP_JOINTS, q))["joint_rf"] for _, q, _ in pts]
-    assert rf[:7] == [0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5] and rf[-1] == 1.0  # closes after pose 4, as pickup.py
-    assert pts[-1][0] - pts[6][0] == pytest.approx(0.5)  # in a 0.5 s ramp
-    assert {dict(zip(PICKUP_JOINTS, q))["body_joint"] for _, q, _ in pts} == {0.2}  # lowered once pose 1 is reached
+    assert rf[:6] == [0.0, 0.0, 0.0, 0.0, 0.5, 0.5] and rf[15:] == [1.0, 1.0]  # closes as the move away starts
+    assert pts[15][0] - pts[5][0] == pytest.approx(0.5)  # in a 0.5 s ramp, then the rest of the move
+    assert pts[-1][0] - pts[5][0] == pytest.approx(8.0)
+    assert {dict(zip(PICKUP_JOINTS, q))["body_joint"] for _, q, _ in pts} == {0.19}  # lowered once pose 1 is reached
     assert plan.trajectory_duration_seconds == pts[-1][0]
 
 
