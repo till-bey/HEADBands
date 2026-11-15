@@ -14,6 +14,7 @@ from app.robotics.action_schema import (
     DANGEROUS_ACTIONS_REQUIRING_CONFIRMATION,
     AllowedActionType,
     GestureTrajectory,
+    ManualControlRequest,
     RobotActionProposal,
     RobotOperationalState,
     RobotStatus,
@@ -35,6 +36,17 @@ _FORBIDDEN_CODE_OR_TOPIC_RE = re.compile(
     r"|/left_gripper|/right_gripper|/joint_trajectory|/camera/color/image_raw|/can0/|/can1/|ros2\s+topic)",
     re.IGNORECASE,
 )
+
+
+def manual_limits() -> dict[str, tuple[float, float]]:
+    """(min, max) of every joint the manual panel may move; body_joint is the lift in metres."""
+    return {
+        **gesture_joint_limits(),
+        **HEAD_LIMITS,
+        "joint_lf": (0.0, 1.0),
+        "joint_rf": (0.0, 1.0),
+        "body_joint": (0.0, 0.8),
+    }
 
 
 class SafetyValidationError(ValueError):
@@ -178,8 +190,34 @@ class ActionSafetyValidator:
             rationale=proposal.rationale,
             head_pitch_rad=proposal.head_pitch_rad,
             head_yaw_rad=proposal.head_yaw_rad,
+            throw_variant=proposal.throw_variant if proposal.action == AllowedActionType.THROW_OBJECT else None,
             gesture=gesture,
         )
+
+    def assert_manual_safe(self, req: ManualControlRequest, robot_status: RobotStatus) -> None:
+        """Limits and robot state for a manual panel command; a zero base jog (release) always passes."""
+        moving = bool(req.joints) or (req.base is not None and any(abs(v) > 1e-5 for v in req.base))
+        if moving:
+            self.assert_robot_state_safe(robot_status, require_active_watchdog=True)
+        limits = manual_limits()
+        for name, value in req.joints.items():
+            if name not in limits:
+                raise SafetyValidationError(f"Joint {name!r} cannot be moved from the manual panel.")
+            lo, hi = limits[name]
+            if not math.isfinite(value) or not lo - 1e-3 <= value <= hi + 1e-3:
+                raise SafetyValidationError(f"{name}={value} outside [{lo:.3f}, {hi:.3f}].")
+        if req.base is not None:
+            vx, vy, wz = req.base
+            if not all(math.isfinite(v) for v in req.base):
+                raise SafetyValidationError("Base speeds must be finite numbers.")
+            if math.hypot(vx, vy) > self._settings.robot_max_linear_speed_mps + 1e-6:
+                raise SafetyValidationError(
+                    f"Base speed over {self._settings.robot_max_linear_speed_mps:.2f} m/s."
+                )
+            if abs(wz) > self._settings.robot_max_angular_speed_rps + 1e-6:
+                raise SafetyValidationError(
+                    f"Base turn rate over {self._settings.robot_max_angular_speed_rps:.2f} rad/s."
+                )
 
     def assert_gesture_trajectory_safe(self, gesture: GestureTrajectory) -> None:
         """Independent re-check of a planned gesture: joints, limits, timing and joint speed."""

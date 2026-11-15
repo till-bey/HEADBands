@@ -7,6 +7,7 @@ Derived from the `clean_up` branch of `HEADBands` (`src/panther_examples/panther
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 PANTHER_ROS_DOMAIN_ID = 15
@@ -97,7 +98,7 @@ GRIPPER_MODE_PARALLEL = "parallel"
 GRIPPER_OPEN_POS = 0.0
 GRIPPER_CLOSED_POS = 1.0
 GRIPPER_DEFAULT_VEL = 0.5  # GRIPPER_VEL = 0.5 strokes/s in master_controller.py & joint_check.py
-RIGHT_GRIPPER_MAX = 0.67  # panther_examples/robot.py: master_gui closes the right gripper no further
+RIGHT_GRIPPER_MAX = 1.0  # panther_examples/robot.py: master_gui closes the right gripper no further
 
 MAX_ARM_JOINT_VEL_RPS = 0.5  # MAX_JOINT_VEL = 0.5 rad/s in cartesian_follow.py
 
@@ -127,17 +128,18 @@ HEAD_FULL_YAW_MAX_RAD = 1.4827
 HEAD_MAX_VEL_RPS = 0.6  # smoothing speed for head moves
 HEAD_HARD_MAX_VEL_RPS = 0.7  # gesture trajectories are refused above this
 
-# Retargeted right-arm frisbee throw trajectory keyframes (t_sec, (joint_ra0..joint_ra7), joint_rf)
-# Derived from HEADBands clean_up `motion/retarget/joints_trajectory_shoulder_rel_3_v5.csv`
-RETARGETED_FRISBEE_THROW_WAYPOINTS: tuple[tuple[float, tuple[float, ...], float], ...] = (
-    (0.00, (0.1319, -0.0733, -0.2094, 0.6792, -1.6845, 1.5853, 0.0777, -0.3263), 1.0),
-    (0.86, (0.6328, -0.2773, -0.1646, 0.6424, -1.5477, 1.5409, 0.1814, -0.3767), 1.0),
-    (1.72, (0.8493, -0.5702, -0.1604, 0.9749, -1.6001, 1.2430, 0.2250, -0.3626), 1.0),
-    (2.57, (0.6184, -0.7195, -0.1492, 1.1820, -1.6412, 1.0450, 0.2361, -0.1984), 1.0),
-    (3.54, (0.1120, -0.7850, -0.1410, 1.2450, -1.4980, 0.9120, 0.2140, 0.1250), 0.0),
-    (3.97, (-0.1840, -0.8120, -0.1380, 1.2680, -1.3120, 0.8450, 0.1980, 0.3491), 0.0),
-    (4.77, (-0.2450, -0.8250, -0.1360, 1.2750, -1.2650, 0.8200, 0.1920, 0.3491), 0.0),
-)
+# Right-arm frisbee throws, one CSV each in HEADBands `motion/retarget/` (rows t,joint_ra0..joint_ra7,joint_rf with
+# the gripper 1 closed / 0 open), loaded and checked when the bridge starts. The cloud picks one by name
+# (throw_variant, e.g. "throw the frisbee early"); a new version is a new CSV and a line here (and its words in the
+# backend's intent_parser.THROW_VARIANT_WORDS). Played like `cartesian_follow --joints FILE --pause 1`, with
+# PANTHER_THROW_SPEED scaling the timing (2 = twice as fast).
+THROW_DIR = Path(__file__).resolve().parents[6] / "motion" / "retarget"
+THROW_FILES: dict[str, str] = {
+    "standard": "joints_trajectory_shoulder_rel_3_v6.csv",  # v5 with the wrist -30 deg, -5 at release, 15 at the end
+    "early": "joints_trajectory_shoulder_rel_3_v5_early.csv",  # gripper opens 0.2 s earlier
+}
+DEFAULT_THROW = "standard"
+THROW_PAUSE_S = 1.0  # held at the first row before and after the gripper's first command
 
 PANTHER_COMMAND_TOPICS: tuple[str, ...] = (
     TOPIC_CMD_VEL,

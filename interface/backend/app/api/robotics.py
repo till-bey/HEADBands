@@ -21,8 +21,13 @@ from pydantic import BaseModel, Field, ValidationError
 from app.container import ServiceContainer, get_container
 from app.core.logging import get_logger
 from app.core.security import require_api_auth, verify_robot_bridge_ws_auth
-from app.robotics.action_schema import AllowedActionType, RobotActionProposal, RobotTelemetryEvent
-from app.robotics.action_validator import SafetyValidationError
+from app.robotics.action_schema import (
+    AllowedActionType,
+    ManualControlRequest,
+    RobotActionProposal,
+    RobotTelemetryEvent,
+)
+from app.robotics.action_validator import SafetyValidationError, manual_limits
 
 logger = get_logger(__name__)
 
@@ -262,6 +267,33 @@ async def reject_robot_command(
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Command not found in pending queue.")
     return {"rejected": True, "command_id": command_id}
+
+
+@router.get("/api/v1/robotics/manual", dependencies=[Depends(require_api_auth)])
+async def get_manual_limits(
+    container: Annotated[ServiceContainer, Depends(get_container)],
+) -> dict[str, Any]:
+    """Slider ranges and base speed caps for the Web UI manual panel."""
+    return {
+        "limits": manual_limits(),
+        "max_linear_mps": container.settings.robot_max_linear_speed_mps,
+        "max_angular_rps": container.settings.robot_max_angular_speed_rps,
+    }
+
+
+@router.post("/api/v1/robotics/manual", dependencies=[Depends(require_api_auth)])
+async def manual_control(
+    body: ManualControlRequest,
+    container: Annotated[ServiceContainer, Depends(get_container)],
+) -> dict[str, Any]:
+    """Manual panel: base jog and joint targets, sent to the bridge without confirmation."""
+    if not container.settings.robotics_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Robotics integration is disabled.")
+    try:
+        await container.robot_gateway.send_manual(body)
+    except SafetyValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"sent": True}
 
 
 @router.post("/api/v1/robotics/estop", dependencies=[Depends(require_api_auth)])

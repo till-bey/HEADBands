@@ -19,6 +19,7 @@ from app.robotics.action_schema import (
     CameraFrameSnapshot,
     GestureTrajectory,
     JointStatesSnapshot,
+    ManualControlRequest,
     RobotActionProposal,
     RobotOperationalState,
     RobotStatus,
@@ -27,6 +28,7 @@ from app.robotics.action_schema import (
 )
 from app.robotics.action_validator import ActionSafetyValidator, SafetyValidationError
 from app.robotics.gesture_planner import GesturePlanner
+from app.robotics.motion_preview import build_preview
 
 logger = get_logger(__name__)
 
@@ -225,6 +227,10 @@ class RobotSafetyGateway:
             require_active_bridge_watchdog=False,
             gesture=gesture,
         )
+        try:
+            validated.preview = build_preview(validated)
+        except (OSError, ValueError) as exc:  # a preview is display only: never block the command over it
+            logger.warning("No simulation preview for command", extra={"action": validated.action, "error": str(exc)})
 
         if validated.requires_confirmation and not validated.confirmed_by_human:
             self._pending_commands[validated.command_id] = validated
@@ -236,6 +242,14 @@ class RobotSafetyGateway:
 
         dispatched = await self._dispatch_to_bridge(validated)
         return validated, dispatched
+
+    async def send_manual(self, req: ManualControlRequest) -> None:
+        """Check a manual panel command and send it straight to the bridge, which checks it again."""
+        self._validator.assert_manual_safe(req, self.get_status())
+        if self._bridge_ws is None:
+            # Cloud Run may run several instances; the bridge is connected to only one of them.
+            raise SafetyValidationError("The robot bridge is not connected to this server instance.")
+        await self._bridge_ws.send_json({"type": "manual", "command": req.model_dump(mode="json")})
 
     async def plan_gesture(self, description: str) -> GestureTrajectory:
         """Plan a language-described gesture from the robot's current pose; raise if it is refused."""
@@ -332,7 +346,7 @@ class RobotSafetyGateway:
         await self._bridge_ws.send_json(
             {
                 "type": "execute_command",
-                "command": command.model_dump(mode="json"),
+                "command": command.model_dump(mode="json", exclude={"preview"}),  # the bridge forbids unknown keys
             }
         )
         self._status.active_command_id = command.command_id

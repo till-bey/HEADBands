@@ -1,0 +1,42 @@
+{
+ "source": "Cow by Quaternius, https://poly.pizza/m/26zM1outCr, CC0 (public domain)",
+ "height_m": 1.0,
+ "length_m": 1.759,
+ "parts": [
+  {
+   "file": "main.stl",
+   "color": "#78542d",
+   "triangles": 1278
+  },
+  {
+   "file": "main_light.stl",
+   "color": "#a59884",
+   "triangles": 648
+  },
+  {
+   "file": "muzzle.stl",
+   "color": "#9d694a",
+   "triangles": 60
+  },
+  {
+   "file": "hooves.stl",
+   "color": "#685030",
+   "triangles": 144
+  },
+  {
+   "file": "eye_black.stl",
+   "color": "#1b1b1b",
+   "triangles": 44
+  },
+  {
+   "file": "eye_white.stl",
+   "color": "#e6e6e6",
+   "triangles": 4
+  },
+  {
+   "file": "horns.stl",
+   "color": "#9a9069",
+   "triangles": 272
+  }
+ ]
+}

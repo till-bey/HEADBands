@@ -20,13 +20,19 @@ from swiss_robot_bridge.controllers import ControllerSwitcher, StepStream, Timed
 from swiss_robot_bridge.local_safety import (
     LocalSafetyRejectedError,
     LocalSafetySupervisor,
+    ManualCommand,
     PantherActuationPlan,
     TwistSetpoint,
+    THROWS,
     retime_from_current_pose,
+    throw_points,
 )
 from swiss_robot_bridge.panther_topics import (
+    GRIPPER_DEFAULT_VEL,
     HEAD_JOINTS,
     HEAD_MAX_VEL_RPS,
+    LIFT_MAX_VEL_MPS,
+    MAX_ARM_JOINT_VEL_RPS,
     LEFT_ARM_JOINTS,
     LEFT_GRIPPER_CONTROLLER,
     LEFT_TRAJ_CONTROLLER,
@@ -34,6 +40,7 @@ from swiss_robot_bridge.panther_topics import (
     RIGHT_GRIPPER_MAX,
     RIGHT_TRAJ_CONTROLLER,
     TOPIC_LEFT_ARM_TRAJ,
+    THROW_PAUSE_S,
     PANTHER_COMMAND_TOPICS,
     PANTHER_RMW_IMPLEMENTATION,
     PANTHER_ROS_DOMAIN_ID,
@@ -474,7 +481,7 @@ class ROS2HardwareAdapter:
         fallback_positions: tuple[float, float] | None = None,
     ) -> None:
         """Move only the named head joints, smoothly: an eased ramp at <= HEAD_MAX_VEL_RPS, streamed
-        to head_forward_position_controller every 0.1 s by tick_streams (it jumps to each command)."""
+        to head_forward_position_controller every 0.05 s by tick_streams (it jumps to each command)."""
         del fallback_positions  # kept for the call signature; element order is handled in _send_head
         cur_p, cur_y = self._current_head()
         tgt_p = float(targets.get(HEAD_JOINTS[0], cur_p))
@@ -577,7 +584,7 @@ class ROS2HardwareAdapter:
         self._gripper_stream.events = sorted(events)
 
     def tick_streams(self, now: float | None = None) -> None:
-        """Called every 0.1 s: next head set-point and any gripper command that is due."""
+        """Called every 0.05 s: next head set-point and any gripper command that is due."""
         now = time.monotonic() if now is None else now
         sample = self._head_stream.sample(now)
         if sample is not None:
@@ -587,6 +594,37 @@ class ROS2HardwareAdapter:
             self._send_head(pitch, yaw)
         for joint, value in self._gripper_stream.due(now):
             self.publish_gripper("left" if joint == "joint_lf" else "right", value, 1.0)
+
+    def apply_manual(self, cmd: ManualCommand) -> None:
+        """Joint targets from the manual panel (already checked by LocalSafetySupervisor.check_manual).
+
+        An arm goes there in one trajectory point timed for 0.9 x MAX_ARM_JOINT_VEL_RPS, its other joints holding;
+        the head ramps smoothly; grippers and lift get one command each."""
+        targets = cmd.joints
+        head = {j: v for j, v in targets.items() if j in HEAD_JOINTS}
+        if head:
+            self.publish_head_targets(head)
+        if "body_joint" in targets:
+            self.publish_lift(targets["body_joint"], LIFT_MAX_VEL_MPS)
+        for joint, side in (("joint_lf", "left"), ("joint_rf", "right")):
+            if joint in targets:
+                self.publish_gripper(side, targets[joint], GRIPPER_DEFAULT_VEL)
+        arm = tuple(j for js in (LEFT_ARM_JOINTS, RIGHT_ARM_JOINTS) if any(j in targets for j in js) for j in js)
+        if not arm:
+            return
+        if not all(j in self.joint_positions for j in arm):
+            raise LocalSafetyRejectedError("Arm position unknown (no /joint_states yet); arm not moved.")
+        goal = tuple(float(targets.get(j, self.joint_positions[j])) for j in arm)
+        gap = max(abs(q - self.joint_positions[j]) for j, q in zip(arm, goal))
+        duration = max(0.3, gap / (MAX_ARM_JOINT_VEL_RPS * 0.9))
+        self.publish_master_trajectory(
+            PantherActuationPlan(
+                command_id="manual",
+                action="manual",
+                master_trajectory_joints=arm,
+                master_trajectory_points=[(round(duration, 3), goal, None)],
+            )
+        )
 
     def apply_panther_plan(self, plan: PantherActuationPlan) -> None:
         """Dispatch a validated `PantherActuationPlan` across the real UniX AI Panther topics."""
@@ -606,8 +644,8 @@ class ROS2HardwareAdapter:
             self.publish_lift(plan.lift_position_m, plan.lift_velocity_mps)
 
         if plan.master_trajectory_points:
-            if plan.action == "generated_gesture" and plan.master_trajectory_joints:
-                # Planned from the pose the cloud last saw; give the arm time to reach the first point.
+            if plan.action in ("generated_gesture", "throw_object") and plan.master_trajectory_joints:
+                # The arm may be anywhere: give it time to reach the first point slowly.
                 plan.master_trajectory_points = retime_from_current_pose(
                     tuple(plan.master_trajectory_joints), plan.master_trajectory_points, self.joint_positions
                 )
@@ -643,8 +681,18 @@ async def run_bridge_loop() -> None:
         max_workspace_radius_m=float(os.getenv("ROBOT_MAX_WORKSPACE_RADIUS_M", "10.0")),
         watchdog_timeout_seconds=float(os.getenv("LOCAL_WATCHDOG_TIMEOUT_SECONDS", "2.5")),
         head_order=os.getenv("PANTHER_HEAD_ORDER", "pitch_yaw"),
-        head_full_range=os.getenv("PANTHER_HEAD_FULL_RANGE", "0").strip().lower() in {"1", "true", "yes", "on"},
+        head_full_range=os.getenv("PANTHER_HEAD_FULL_RANGE", "1").strip().lower() in {"1", "true", "yes", "on"},
+        throw_speed=float(os.getenv("PANTHER_THROW_SPEED", "1.0")),
     )
+    for name in THROWS:  # a bad PANTHER_THROW_SPEED stops the bridge here, not mid-throw
+        throw = throw_points(supervisor.throw_speed, name)
+        peak = max(
+            abs(b[1][i] - a[1][i]) / (b[0] - a[0]) for a, b in zip(throw, throw[1:]) for i in range(len(a[1]))
+        )
+        release = next((t for t, _q, g in throw if g == 0.0), None)
+        logger.info("Throw %r: speed x%.2f, %.2f s after the 2 s pause, gripper open at %s, peak arm joint speed "
+                    "%.2f rad/s", name, supervisor.throw_speed, throw[-1][0] - 2 * THROW_PAUSE_S,
+                    f"{release - 2 * THROW_PAUSE_S:.2f} s" if release is not None else "never", peak)
     camera_mgr = PantherCameraManager(
         idle_timeout_seconds=float(os.getenv("PANTHER_CAMERA_IDLE_TIMEOUT_SECONDS", "90.0")),
         startup_timeout_seconds=float(os.getenv("PANTHER_CAMERA_STARTUP_TIMEOUT_SECONDS", "4.5")),
@@ -656,7 +704,7 @@ async def run_bridge_loop() -> None:
         headers["Authorization"] = f"Bearer {shared_token}"
 
     async def _local_watchdog_and_ros_spin_loop() -> None:
-        """10 Hz local control loop: spins ROS 2 callbacks, streams `/cmd_vel`, zeroes on timeout, idles camera."""
+        """20 Hz local control loop (so a manual jog stops within 0.25 s of its last command): spins ROS 2 callbacks, streams `/cmd_vel`, zeroes on timeout, idles camera."""
         while True:
             ros_hw.spin_once()
             now_mono = time.monotonic()
@@ -678,7 +726,7 @@ async def run_bridge_loop() -> None:
                 now_mono,
                 deactivate_ros_camera_cb=ros_hw.deactivate_camera_subscriptions,
             )
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
     watchdog_task = asyncio.create_task(_local_watchdog_and_ros_spin_loop())
     try:
@@ -782,6 +830,18 @@ async def run_bridge_loop() -> None:
 
                             elif msg_type == "reset_estop":
                                 supervisor.reset_local_estop()
+
+                            elif msg_type == "manual":
+                                try:
+                                    manual = supervisor.check_manual(data.get("command"))
+                                    if manual.base is not None:
+                                        twist = supervisor.drive_manual(manual.base, time.monotonic())
+                                        if twist.is_nonzero():
+                                            ros_hw.ensure_ultrasonics_enabled()
+                                        ros_hw.publish_twist(twist)
+                                    ros_hw.apply_manual(manual)
+                                except LocalSafetyRejectedError as exc:
+                                    logger.error("Local safety gate rejected manual command: %s", exc)
 
                             elif msg_type == "capture_camera":
                                 req_id = str(data.get("request_id") or f"cam-{int(time.time() * 1000)}")

@@ -237,6 +237,25 @@ _THROW_OBJECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Throw versions the bridge knows (robot_bridge panther_topics.THROW_FILES), by the words that pick them;
+# no word = the standard throw. "throw the frisbee early" -> "early".
+THROW_VARIANT_WORDS: dict[str, re.Pattern[str]] = {
+    "early": re.compile(
+        r"\b(early|earlier|sooner|fr[üu]e\w*|fr[üu]h\w*|t[ôo]t|temprano|antes|d[řr][íi]v\w*)\b|早", re.IGNORECASE
+    ),
+}
+
+
+def throw_variant(text: str) -> str | None:
+    """The throw version named in an instruction, or None for the standard throw."""
+    return next((name for name, words in THROW_VARIANT_WORDS.items() if words.search(text)), None)
+
+
+def _throw_rationale(variant: str | None, language: str, cleaned: str) -> str:
+    kind = f"{variant} " if variant else ""
+    return f"Execute retargeted right-arm frisbee throw trajectory, {kind or 'standard '}release ({language}): {cleaned[:120]}"
+
+
 _SPOKEN_DIGIT_MAP: dict[str, int] = {
     "zero": 0, "oh": 0, "null": 0, "zéro": 0, "cero": 0, "nula": 0,
     "one": 1, "ein": 1, "eins": 1, "eine": 1, "einen": 1, "un": 1, "une": 1, "uno": 1, "una": 1, "jeden": 1, "jedna": 1, "jednu": 1,
@@ -576,6 +595,7 @@ class ExplicitClauseSpec:
     rationale: str = ""
     head_pitch_rad: float | None = None
     head_yaw_rad: float | None = None
+    throw_variant: str | None = None
 
 
 # ---------------------------------------------------------------------------- head commands
@@ -695,7 +715,8 @@ def parse_explicit_clause_spec(text: str, language: str = "auto") -> ExplicitCla
             action="throw_object",
             speed=0.25,
             has_explicit_number=True,
-            rationale=f"Execute retargeted right-arm frisbee throw trajectory ({language}): {cleaned[:120]}",
+            rationale=_throw_rationale(throw_variant(cleaned), language, cleaned),
+            throw_variant=throw_variant(cleaned),
         )
 
     head = parse_head_command(cleaned)
@@ -840,7 +861,8 @@ def parse_multilingual_robot_intent(text: str, language: str = "auto") -> tuple[
             "action": "throw_object",
             "object_label": "frisbee",
             "speed": 0.25,
-            "rationale": f"Execute retargeted right-arm frisbee throw trajectory ({language}): {cleaned[:120]}",
+            "rationale": _throw_rationale(throw_variant(cleaned), language, cleaned),
+            "throw_variant": throw_variant(cleaned),
         }
 
     # 3d. Head (before rotation, so "turn your head left" never rotates the base)

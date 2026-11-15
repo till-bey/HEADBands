@@ -23,6 +23,7 @@
   const captureCameraBtn = document.getElementById("captureCameraBtn");
   const pantherTelemetryBar = document.getElementById("pantherTelemetryBar");
   const confirmationsList = document.getElementById("confirmationsList");
+  const simpleConfirmBtn = document.getElementById("simpleConfirmBtn");
   const residencyFooter = document.getElementById("residencyFooter");
 
   let ws = null;
@@ -108,6 +109,7 @@
       language: languageSelect.value,
       dialect: dialectSelect.value,
     });
+    if (window.apiPassword && window.apiPassword()) params.set("token", window.apiPassword());
     ws = new WebSocket(`${proto}//${window.location.host}/ws/voice?${params.toString()}`);
 
     ws.onopen = () => {
@@ -133,6 +135,7 @@
       if (c.object_label) {
         details.push(`object="${c.object_label}"`);
       }
+      if (c.action === "throw_object") details.push(`throw=${c.throw_variant || "standard"}`);
       if (c.head_yaw_rad !== null && c.head_yaw_rad !== undefined) {
         details.push(`head yaw=${Math.round((Number(c.head_yaw_rad) * 180) / Math.PI)}°`);
       }
@@ -396,7 +399,6 @@
   }
 
   // ---------- Generated gestures ----------
-  const previewedGestures = new Set();
   const gestureForm = document.getElementById("gestureForm");
   const gestureInput = document.getElementById("gestureInput");
 
@@ -411,9 +413,10 @@
     return parts.join(" · ");
   }
 
-  function previewGesture(gesture, scroll = false) {
+  // Plays one MotionPreview, or a list of them in order, in the Simulation view (display only).
+  function previewMotion(motion, scroll = false) {
     if (!window.PantherRobotView || !window.PantherRobotView.preview) return;
-    window.PantherRobotView.preview(gesture);
+    window.PantherRobotView.preview(motion);
     if (scroll) {
       const sim = document.getElementById("simCanvas");
       if (sim) sim.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -440,8 +443,7 @@
           return;
         }
         const cmd = data.command;
-        previewedGestures.add(cmd.command_id);
-        previewGesture(cmd.gesture);
+        previewMotion(cmd.preview || cmd.gesture);
         er2Output.textContent =
           `Planned "${cmd.gesture.name}": ${describeGesture(cmd.gesture)}. ` +
           "Previewing in Simulation. Confirm it under “Waiting for your confirmation” to run it on the robot.";
@@ -454,7 +456,69 @@
     });
   }
 
+  // Confirms the steps in order and stops at the first refusal (e.g. expired): later steps depend on it.
+  // Returns the refusal's reason, or null.
+  async function confirmAll(pending) {
+    let error = null;
+    for (const stepCmd of pending) {
+      const res = await fetch(`/api/v1/robotics/confirm/${stepCmd.command_id}`, { method: "POST" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        error = typeof d.detail === "string" ? d.detail : res.statusText;
+        break;
+      }
+    }
+    refreshRobotStatus();
+    return error;
+  }
+
+  // ---------- Preview, then start ----------
+  // Whatever is pending plays in the Simulation first (all steps in order). The simple view's button
+  // stays "Previewing…" until the preview has played through once, then reads "Start motion".
+  let pendingNow = [];
+  let previewKey = "";
+  let startBusy = false;
+  let startNote = null; // { text, until }
+
+  function previewPending(pending) {
+    const key = pending.map((c) => c.command_id).join(",");
+    if (key === previewKey) return;
+    previewKey = key;
+    const view = window.PantherRobotView;
+    if (!view) return;
+    if (pending.length) view.preview(pending.map((c) => c.preview).filter(Boolean));
+    else if (view.isPreviewing()) view.stopPreview();
+  }
+
+  function updateStartButton() {
+    const view = window.PantherRobotView;
+    const wait = view && view.isPreviewing() ? Math.ceil(view.previewRemaining()) : 0;
+    const expired = pendingNow.some((c) => Date.parse(c.expires_at) <= Date.now());
+    let label = `Start motion${pendingNow.length > 1 ? ` (${pendingNow.length} steps)` : ""}`;
+    let off = startBusy;
+    if (startNote && Date.now() < startNote.until) [label, off] = [startNote.text, true];
+    else if (!pendingNow.length) [label, off] = ["No trajectory to confirm", true];
+    else if (expired) [label, off] = ["Expired: ask again", true];
+    else if (wait > 0) [label, off] = [`Previewing… ${wait} s`, true];
+    setText(simpleConfirmBtn, label);
+    simpleConfirmBtn.disabled = off;
+  }
+
+  simpleConfirmBtn.addEventListener("click", async () => {
+    if (!pendingNow.length || startBusy) return;
+    startBusy = true;
+    updateStartButton();
+    const error = await confirmAll(pendingNow);
+    if (error) startNote = { text: `Not started: ${error}`, until: Date.now() + 5000 };
+    else if (window.PantherRobotView) window.PantherRobotView.stopPreview(); // back to the live robot
+    startBusy = false;
+  });
+  setInterval(updateStartButton, 250);
+
   function renderConfirmations(pending) {
+    pendingNow = pending;
+    previewPending(pending);
+    updateStartButton();
     confirmationsList.innerHTML = "";
     if (pending.length === 0) {
       const p = document.createElement("p");
@@ -470,12 +534,9 @@
       const confirmAllBtn = document.createElement("button");
       confirmAllBtn.className = "btn btn-primary";
       confirmAllBtn.textContent = `Confirm All ${pending.length} Steps (Sequential)`;
-      confirmAllBtn.onclick = async () => {
+      confirmAllBtn.onclick = () => {
         confirmAllBtn.disabled = true;
-        for (const stepCmd of pending) {
-          await fetch(`/api/v1/robotics/confirm/${stepCmd.command_id}`, { method: "POST" });
-        }
-        refreshRobotStatus();
+        confirmAll(pending);
       };
       batchBar.appendChild(confirmAllBtn);
       confirmationsList.appendChild(batchBar);
@@ -491,10 +552,6 @@
 
       if (cmd.gesture) {
         card.appendChild(document.createTextNode(` ${describeGesture(cmd.gesture)}`));
-        if (!previewedGestures.has(cmd.command_id)) {
-          previewedGestures.add(cmd.command_id);
-          previewGesture(cmd.gesture);
-        }
       }
 
       const paramParts = [];
@@ -510,6 +567,7 @@
       if (cmd.object_label && !cmd.gesture) {
         paramParts.push(`object="${cmd.object_label}"`);
       }
+      if (cmd.action === "throw_object") paramParts.push(`throw=${cmd.throw_variant || "standard"}`);
       if (!cmd.gesture) paramParts.push(`speed=${cmd.speed} m/s`);
 
       if (paramParts.length) card.appendChild(document.createTextNode(` ${paramParts.join(" · ")}`));
@@ -542,13 +600,13 @@
 
       actions.appendChild(approveBtn);
       actions.appendChild(rejectBtn);
-      if (cmd.gesture) {
+      if (cmd.preview) {
         const previewBtn = document.createElement("button");
         previewBtn.className = "btn btn-ghost";
         previewBtn.type = "button";
         previewBtn.textContent = "Preview";
-        previewBtn.setAttribute("aria-label", `Preview gesture ${cmd.gesture.name} in the simulation`);
-        previewBtn.onclick = () => previewGesture(cmd.gesture, true);
+        previewBtn.setAttribute("aria-label", `Preview ${cmd.preview.name} in the simulation`);
+        previewBtn.onclick = () => previewMotion(cmd.preview, true);
         actions.appendChild(previewBtn);
       }
       card.appendChild(actions);

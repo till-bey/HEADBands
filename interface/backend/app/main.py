@@ -99,6 +99,15 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
             if static_dir.is_dir():
                 app.mount("/assets", StaticFiles(directory=str(static_dir)), name="assets")
 
+            @app.middleware("http")
+            async def revalidate_web_ui(request, call_next):  # type: ignore[no-untyped-def]
+                # The page and its assets change with each deploy: browsers check the ETag on every load
+                # (a cheap 304 when unchanged) instead of guessing a cache lifetime and showing old files.
+                response = await call_next(request)
+                if request.url.path == "/" or request.url.path.startswith("/assets/"):
+                    response.headers["Cache-Control"] = "no-cache"
+                return response
+
             @app.get("/", include_in_schema=False)
             async def serve_index() -> FileResponse:
                 return FileResponse(str(frontend_dir / "index.html"))

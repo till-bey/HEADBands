@@ -79,6 +79,22 @@ class GestureTrajectory(BaseModel):
     time_scale: float = 1.0
 
 
+class MotionPreview(BaseModel):
+    """What a command will look like, for the Web UI simulation only (motion_preview.build_preview).
+
+    Never sent to the robot bridge, which plans the real motion itself. Joint points are absolute positions;
+    base_path rows are [t, x, y, yaw] relative to where the robot stands when the step starts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(max_length=80)
+    duration_s: float
+    joint_names: list[str] = Field(default_factory=list, max_length=24)
+    points: list[GestureTrajectoryPoint] = Field(default_factory=list, max_length=600)
+    base_path: list[list[float]] = Field(default_factory=list, max_length=50)
+
+
 class RobotOperationalState(StrEnum):
     """Reported local robot state (Rule 10: reject commands when in any unsafe state)."""
 
@@ -170,6 +186,22 @@ class RobotActionProposal(BaseModel):
     head_yaw_rad: float | None = Field(
         default=None, description="move_head/look_at only: head yaw, + looks left, - looks right (rad)."
     )
+    throw_variant: str | None = Field(
+        default=None, max_length=40, description="throw_object only: which throw (e.g. 'early'); None = standard."
+    )
+
+
+class ManualControlRequest(BaseModel):
+    """Web UI manual panel, sent straight to the bridge (no confirmation: the operator is driving).
+
+    base: (vx, vy m/s, wz rad/s) jog, resent every 0.1 s while held; the bridge stops it 0.2 s after the last one.
+    joints: targets for arm, head and gripper joints (0 open .. 1 closed) and body_joint (lift, m).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    base: tuple[float, float, float] | None = None
+    joints: dict[str, float] = Field(default_factory=dict, max_length=24)
 
 
 class ValidatedRobotCommand(BaseModel):
@@ -191,7 +223,9 @@ class ValidatedRobotCommand(BaseModel):
     rationale: str = ""
     head_pitch_rad: float | None = None
     head_yaw_rad: float | None = None
+    throw_variant: str | None = None
     gesture: GestureTrajectory | None = None
+    preview: MotionPreview | None = None  # Web UI only; robot_gateway never sends it to the bridge
 
 
 class RoboticsReasoningResult(BaseModel):

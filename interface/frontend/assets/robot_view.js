@@ -5,12 +5,14 @@
  * (ROS_DOMAIN_ID=77) to watch the sim, or at the robot (15) to watch the robot. "Demo" animates
  * the joints locally when no bridge is streaming. This view only reads; it never commands.
  *
- * Shapes are the same stand-ins RViz shows without the vendor meshes: rods between joint
- * frames, orange spheres on moving joints, a cyan dot on the RGB-D camera.
+ * Links are drawn with the panther_sim stylized meshes (assets/meshes, WebGL on #simMeshCanvas
+ * over the floor grid). Without WebGL, or until they load: rods between joint frames, orange
+ * spheres on moving joints, a cyan dot on the RGB-D camera.
  */
 (() => {
   const canvas = document.getElementById("simCanvas");
   if (!canvas) return;
+  const meshCanvas = document.getElementById("simMeshCanvas");
   const statusEl = document.getElementById("simStatus");
   const demoToggle = document.getElementById("simDemoToggle");
   const resetBtn = document.getElementById("simResetView");
@@ -20,7 +22,7 @@
   const view = { ...DEFAULT_VIEW };
   const COLORS = {
     left: "#3c96eb", right: "#5ac85a", head: "#c878dc", body: "#c3c3c8",
-    joint: "#f58c28", camera: "#28dce6", grid: "#334155", gridAxis: "#475569", base: "#7c8088",
+    joint: "#f58c28", camera: "#28dce6", grid: "#7aa866", gridAxis: "#f6f2ea", base: "#7c8088",
   };
 
   let model = null;
@@ -102,7 +104,15 @@
     while (stack.length) {
       for (const j of byParent[stack.pop()] || []) { ordered.push(j); stack.push(j.child); }
     }
-    return { root, joints: ordered };
+    // Vendor mesh paths (file:///.../share/mh3_description/meshes/...) -> /assets/meshes/...;
+    // the Odin1 lidar (another package) has no stand-in of its own: base_link's covers it.
+    const meshes = {};
+    for (const l of doc.querySelectorAll("robot > link")) {
+      const m = l.querySelector("visual > geometry > mesh");
+      const f = m && m.getAttribute("filename");
+      if (f && f.includes("/share/mh3_description/")) meshes[l.getAttribute("name")] = "/assets/" + f.split("/share/mh3_description/")[1];
+    }
+    return { root, joints: ordered, meshes };
   }
 
   function forwardKinematics(m, q) {
@@ -140,7 +150,7 @@
     return "body";
   };
 
-  function makeCamera(w, h) {
+  function cameraBasis(h) {
     const yaw = (view.yaw * Math.PI) / 180, pitch = (view.pitch * Math.PI) / 180;
     const t = view.target;
     const eye = [t[0] + view.dist * Math.cos(pitch) * Math.cos(yaw), t[1] + view.dist * Math.cos(pitch) * Math.sin(yaw),
@@ -152,6 +162,12 @@
     const right = norm(cross(fwd, [0, 0, 1]));
     const up = cross(right, fwd);
     const f = h / 2 / Math.tan((45 * Math.PI) / 360);
+    return { eye, fwd, right, up, f };
+  }
+
+  function makeCamera(w, h) {
+    const { eye, fwd, right, up, f } = cameraBasis(h);
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     return (p) => {
       const d = p.map((v, i) => v - eye[i]);
       const z = dot(d, fwd);
@@ -170,11 +186,7 @@
     }
     const w = canvas.width, h = canvas.height;
     const ctx = canvas.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, "#1e293b");
-    grad.addColorStop(1, "#0b1220");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+    drawScenery(ctx, w, h);
     if (!model) return;
 
     const project = makeCamera(w, h);
@@ -195,7 +207,151 @@
       line([k, -2, 0], [k, 2, 0], c, 0.004);
       line([-2, k, 0], [2, k, 0], c, 0.004);
     }
-    const frames = forwardKinematics(model, positions);
+    let frames = forwardKinematics(model, positions);
+    if (basePose) { // a previewed base move carries the whole robot
+      const T = mat.fromRT(mat.axisAngle([0, 0, 1], basePose[2]), [basePose[0], basePose[1], 0]);
+      frames = Object.fromEntries(Object.entries(frames).map(([k, F]) => [k, mat.mul(T, F)]));
+    }
+    if (!drawMeshes(frames)) drawSticks(frames, line, ball); // the meshes replace the stick figure
+    paint(ctx, prims);
+  }
+
+  // 3D scenery after the Leukerbad Robotics Hackathon poster: a coral sky, faceted Alpine peaks (snow-white
+  // and blue faces), a hazier range behind, and a navy ground disk that ends at the peaks' feet.
+  // Everything is in world coordinates, so it turns and zooms with the robot.
+  const GRASS = "#2f4f2a"; // dark alpine meadow
+  const GROUND_R = 25; // radius of the ground disk; every peak's foot tucks just under its edge
+  const rand = (seed) => { let x = seed; return () => (x = (x * 16807) % 2147483647) / 2147483647; };
+  const at = (ang, r, z) => [r * Math.cos(ang), r * Math.sin(ang), z];
+
+  function face(out, tri, lit, shade) {
+    const [a, b, c] = tri;
+    const u = b.map((v, k) => v - a[k]), v = c.map((x, k) => x - a[k]);
+    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const cx = a[0] + b[0] + c[0], cy = a[1] + b[1] + c[1];
+    if (n[0] * cx + n[1] * cy > 0) n = n.map((x) => -x); // the side facing the robot, at the ring's centre
+    // Poster lighting: light from the same side of every peak, as seen from the robot, so each one shows a
+    // snow side and a blue side from any view. tang = how much the facet faces that side; nz = how flat it is.
+    const len = Math.hypot(...n) || 1, cl = Math.hypot(cx, cy) || 1;
+    const tang = (n[0] * -cy + n[1] * cx) / cl / len, nz = n[2] / len;
+    out.push({ pts: tri, color: tang > 0.08 || nz > 0.9 ? lit : shade });
+  }
+
+  // One peak: a jagged ridge row, two jittered mid-slope rows and a foot row on the ground nearer the robot,
+  // stitched into triangles so every facet catches the light differently. Concave sides make it pointy.
+  function peak(out, rnd, ang, halfW, R, H, depth, lit, shade) {
+    const N = 11, ROWS = [[1, 0, 0.8, 0.45], [0.55, 0.35, 0.3, 0.3], [0.2, 0.7, 0.1, 0.2], [0, 1, 0, 0]];
+    const rows = ROWS.map(() => []);
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1), edge = i === 0 || i === N - 1;
+      const shape = Math.pow(1 - Math.abs(2 * t - 1), 1.5);
+      const a = ang + (t - 0.5) * 2 * halfW;
+      ROWS.forEach(([hk, dk, hMin, hVar], r) => {
+        const wob = r && !edge ? (rnd() - 0.5) * halfW * 0.2 : 0;
+        const z = r === ROWS.length - 1 || edge ? -0.3 : -0.3 + H * shape * hk * (hMin / hk + rnd() * hVar / Math.max(hk, 0.2));
+        rows[r].push(at(a + wob, R - depth * dk, r === 0 && !edge ? -0.3 + H * shape * (0.75 + rnd() * 0.45) : z));
+      });
+    }
+    for (let r = 0; r < rows.length - 1; r++) {
+      for (let i = 0; i < N - 1; i++) {
+        const a = rows[r][i], b = rows[r][i + 1], c = rows[r + 1][i], d = rows[r + 1][i + 1];
+        face(out, [a, b, d], lit, shade);
+        face(out, [a, d, c], lit, shade);
+      }
+    }
+  }
+
+  function range(R, count, hMin, hMax, depth, lit, shade, seed) {
+    const rnd = rand(seed), out = [];
+    for (let i = 0; i < count; i++) {
+      const ang = ((i + rnd() * 0.6) / count) * Math.PI * 2;
+      const halfW = (Math.PI / count) * (0.85 + rnd() * 0.5); // neighbours just overlap
+      const r = R * (0.92 + rnd() * 0.16), height = hMin + rnd() * (hMax - hMin);
+      // the foot row reaches just under the ground disk's edge, so no peak floats or shows a gap below it
+      peak(out, rnd, ang, halfW, r, height, Math.max(depth, r - GROUND_R + 0.5), lit, shade);
+    }
+    return out;
+  }
+
+  // Props on the meadow: chalets and pines, placed once at random (fixed seed) in a ring around the robot,
+  // kept apart from each other and clear of the robot's area (the camera orbits up to 7 m out).
+  // Row-major 4x4 transforms, as the FK frames. sx = sy = k, sz = k * stretch.
+  const placed = []; // [x, y, keep-out radius] of everything placed so far
+  function scatter(n, rMin, rMax, kMin, kMax, stretch, gap, seed, turn) {
+    const rnd = rand(seed), out = [];
+    for (let tries = 0; out.length < n && tries < n * 40; tries++) {
+      const a = rnd() * Math.PI * 2, r = rMin + rnd() * (rMax - rMin), k = kMin + rnd() * (kMax - kMin);
+      const x = r * Math.cos(a), y = r * Math.sin(a);
+      if (placed.some(([px, py, pr]) => Math.hypot(px - x, py - y) < pr + gap)) continue;
+      placed.push([x, y, gap]);
+      const yaw = turn ? a + Math.PI + (rnd() - 0.5) * 0.8 : rnd() * Math.PI * 2; // chalets face the robot
+      const c = Math.cos(yaw) * k, s = Math.sin(yaw) * k, kz = k * (1 + (rnd() - 0.5) * stretch);
+      out.push([c, -s, 0, x, s, c, 0, y, 0, 0, kz, -0.05, 0, 0, 0, 1]);
+    }
+    return out;
+  }
+  const CHALETS = scatter(30, 10, 20, 1.6, 2.2, 0, 1.3, 11, true); // model 1 m tall
+  const TREES = scatter(70, 8.5, 23, 0.9, 1.7, 0.5, 0.45, 23, false); // pine 1.7 m tall
+  const COWS = scatter(16, 8.5, 18, 0.45, 0.55, 0, 0.6, 31, false); // cow 1 m tall, 1.76 m long
+
+  const SCENERY = [
+    ...range(55, 13, 4.5, 7.5, 12, "#f6e4dc", "#8cc6e4", 7), // back range, hazier
+    ...range(38, 17, 2.8, 5, 9, "#f6f2ea", "#67b6de", 3), // main range: snow and blue shadow
+  ];
+
+  function drawScenery(ctx, w, h) {
+    const { fwd, up, f } = cameraBasis(h);
+    // horizon: where a far point straight ahead, at camera height, lands on screen
+    const hl = Math.hypot(fwd[0], fwd[1]) || 1e-6;
+    const hf = [fwd[0] / hl, fwd[1] / hl, 0];
+    const depth = hf[0] * fwd[0] + hf[1] * fwd[1];
+    const yH = Math.min(Math.max(h / 2 - (f * (hf[0] * up[0] + hf[1] * up[1])) / Math.max(depth, 1e-3), 0), h);
+    const g = ctx.createLinearGradient(0, 0, 0, Math.max(yH, 1));
+    g.addColorStop(0, "#ec6a65");
+    g.addColorStop(1, "#f29490");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h); // sky everywhere; the ground disk is drawn over it after the peaks
+
+    const project = makeCamera(w, h);
+    const tris = [];
+    for (const t of SCENERY) {
+      const pp = t.pts.map(project);
+      if (pp.every(Boolean)) tris.push({ pp, color: t.color, z: Math.max(pp[0][2], pp[1][2], pp[2][2]) });
+    }
+    tris.sort((a, b) => b.z - a.z); // far to near
+    ctx.lineWidth = 1;
+    for (const t of tris) {
+      ctx.fillStyle = ctx.strokeStyle = t.color; // the stroke hides hairline seams between facets
+      ctx.beginPath();
+      ctx.moveTo(t.pp[0][0], t.pp[0][1]);
+      ctx.lineTo(t.pp[1][0], t.pp[1][1]);
+      ctx.lineTo(t.pp[2][0], t.pp[2][1]);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Ground: a dark-green disk out to just before the peaks' feet. Its far edge is a curve across the view;
+    // everything below it is ground, so between and past the peaks there is only sky.
+    const edge = [];
+    for (let k = 0; k < 360; k++) {
+      const p = project(at((k / 360) * Math.PI * 2, GROUND_R, 0));
+      if (p && p[2] > 0.5) edge.push(p);
+    }
+    ctx.fillStyle = GRASS;
+    if (!edge.length) { ctx.fillRect(0, 0, w, h); return; } // looking straight down: all ground
+    edge.sort((a, b) => a[0] - b[0]);
+    ctx.beginPath();
+    ctx.moveTo(Math.min(0, edge[0][0]), h);
+    ctx.lineTo(Math.min(0, edge[0][0]), edge[0][1]);
+    for (const p of edge) ctx.lineTo(p[0], p[1]);
+    ctx.lineTo(Math.max(w, edge[edge.length - 1][0]), edge[edge.length - 1][1]);
+    ctx.lineTo(Math.max(w, edge[edge.length - 1][0]), h);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawSticks(frames, line, ball) {
     const base = frames.base_link || frames[model.root];
     const corners = [];
     for (const z of [0.06, 0.28]) for (const y of [-0.21, 0.21]) for (const x of [-0.25, 0.25]) corners.push(mat.apply(base, [x, y, z]));
@@ -213,7 +369,9 @@
       if ((j.type === "revolute" || j.type === "prismatic") && !j.mimic) ball(b, COLORS.joint, 0.035);
       if (j.child.toLowerCase().includes("rgbd")) ball(b, COLORS.camera, 0.03);
     }
+  }
 
+  function paint(ctx, prims) {
     prims.sort((p, q) => q.z - p.z);
     ctx.lineCap = "round";
     for (const p of prims) {
@@ -236,6 +394,185 @@
     }
   }
 
+  // ------------------------------------------------------------------ meshes (WebGL)
+  const gl = meshCanvas && meshCanvas.getContext("webgl", { alpha: true, antialias: true });
+  const glMeshes = {}; // link -> { buf, count }
+  const chaletParts = []; // { buf, count, color }: one per colour of assets/meshes/chalet (drawn at each of CHALETS)
+  const treeParts = []; // the same for the low-poly pine built by pineMesh()
+  const cowParts = []; // and for assets/meshes/cow (drawn at each of COWS)
+  const PROPS = [{ parts: chaletParts, at: CHALETS }, { parts: treeParts, at: TREES }, { parts: cowParts, at: COWS }];
+
+  // A low-poly pine, 1.7 m tall: a hexagonal trunk and three stacked six-sided cones.
+  // Interleaved [x y z nx ny nz] per vertex, flat normals per facet, as parseStl gives.
+  function pineMesh() {
+    const tri = (out, a, b, c) => {
+      const u = b.map((v, k) => v - a[k]), v = c.map((x, k) => x - a[k]);
+      const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const l = Math.hypot(...n) || 1;
+      for (const p of [a, b, c]) out.push(...p, n[0] / l, n[1] / l, n[2] / l);
+    };
+    const ring = (r, z, k, sides) => [r * Math.cos((k / sides) * Math.PI * 2), r * Math.sin((k / sides) * Math.PI * 2), z];
+    const trunk = [], leaves = [];
+    for (let k = 0; k < 6; k++) {
+      const a0 = ring(0.08, 0, k, 6), a1 = ring(0.08, 0, k + 1, 6), b0 = ring(0.08, 0.45, k, 6), b1 = ring(0.08, 0.45, k + 1, 6);
+      tri(trunk, a0, a1, b1);
+      tri(trunk, a0, b1, b0);
+    }
+    for (const [r, z0, z1] of [[0.55, 0.3, 1.0], [0.44, 0.65, 1.35], [0.3, 1.0, 1.7]]) {
+      for (let k = 0; k < 6; k++) {
+        tri(leaves, ring(r, z0, k, 6), ring(r, z0, k + 1, 6), [0, 0, z1]);
+        tri(leaves, ring(r, z0, k, 6), ring(r, z0, k + 1, 6), [0, 0, z0]); // underside, seen from low views
+      }
+    }
+    return [[new Float32Array(trunk), "#6b4a2b"], [new Float32Array(leaves), "#2f6b45"]];
+  }
+  let glProg = null;
+
+  function initGl() {
+    const sh = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      return s;
+    };
+    glProg = gl.createProgram();
+    gl.attachShader(glProg, sh(gl.VERTEX_SHADER, `
+      attribute vec3 pos; attribute vec3 nrm;
+      uniform mat4 model; uniform vec3 eye, fwd, right, up; uniform vec2 scale;
+      varying float shade;
+      void main() {
+        vec3 d = (model * vec4(pos, 1.0)).xyz - eye;
+        float z = dot(d, fwd);
+        vec3 n = normalize(mat3(model) * nrm);
+        shade = 0.35 + 0.65 * abs(dot(n, normalize(up - fwd)));
+        // near 0.05 m, far 50 m
+        gl_Position = vec4(dot(d, right) * scale.x, dot(d, up) * scale.y, z * (50.05 / 49.95) - 5.0 / 49.95, z);
+      }`));
+    gl.attachShader(glProg, sh(gl.FRAGMENT_SHADER, `
+      precision mediump float; uniform vec3 color; varying float shade;
+      void main() { gl_FragColor = vec4(color * shade, 1.0); }`));
+    gl.linkProgram(glProg);
+    if (!gl.getProgramParameter(glProg, gl.LINK_STATUS)) { glProg = null; return; }
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  // Binary STL -> interleaved [x y z nx ny nz] per vertex (facet normal on all three).
+  function parseStl(buf) {
+    const dv = new DataView(buf);
+    const n = dv.getUint32(80, true);
+    if (buf.byteLength < 84 + n * 50) throw new Error("short STL");
+    const out = new Float32Array(n * 18);
+    for (let i = 0; i < n; i++) {
+      const o = 84 + i * 50;
+      const nrm = [dv.getFloat32(o, true), dv.getFloat32(o + 4, true), dv.getFloat32(o + 8, true)];
+      for (let v = 0; v < 3; v++) {
+        const k = (i * 3 + v) * 6;
+        for (let c = 0; c < 3; c++) {
+          out[k + c] = dv.getFloat32(o + 12 + v * 12 + c * 4, true);
+          out[k + 3 + c] = nrm[c];
+        }
+      }
+    }
+    return out;
+  }
+
+  function loadMeshes(m) {
+    if (!gl) return;
+    initGl();
+    if (!glProg) return;
+    const hex = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
+    for (const [link, url] of Object.entries(m.meshes)) {
+      fetch(url)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText))))
+        .then((buf) => {
+          const data = parseStl(buf);
+          const b = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, b);
+          gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+          glMeshes[link] = { buf: b, count: data.length / 6, color: hex(COLORS[group(link)]) };
+        })
+        .catch(() => {}); // a missing part leaves a gap; the rest still draws
+    }
+    for (const [data, color] of pineMesh()) {
+      const b = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      treeParts.push({ buf: b, count: data.length / 6, color: hex(color) });
+    }
+    // Models converted to one STL per colour plus a <name>.json listing them (see the json for source and licence):
+    // Swiss chalets, "Chalet" by Poly by Google (poly.pizza/m/6ufSK2nQBc6, CC BY 3.0), and Brown Swiss cows,
+    // "Cow" by Quaternius (poly.pizza/m/26zM1outCr, CC0). A missing file only leaves that prop out.
+    const loadProp = (name, parts) =>
+      fetch(`/assets/meshes/${name}/${name}.json`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
+        .then((c) => {
+          for (const part of c.parts) {
+            fetch(`/assets/meshes/${name}/${part.file}`)
+              .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText))))
+              .then((buf) => {
+                const data = parseStl(buf);
+                const b = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, b);
+                gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+                parts.push({ buf: b, count: data.length / 6, color: hex(part.color) });
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+    loadProp("chalet", chaletParts);
+    loadProp("cow", cowParts);
+  }
+
+  // Draws every loaded link mesh at its FK frame. False (draw the stick figure) until the first one loads.
+  function drawMeshes(frames) {
+    if (!glProg || (!Object.keys(glMeshes).length && !PROPS.some((p) => p.parts.length))) {
+      if (meshCanvas) meshCanvas.hidden = true;
+      return false;
+    }
+    meshCanvas.hidden = false;
+    const w = canvas.width, h = canvas.height;
+    if (meshCanvas.width !== w || meshCanvas.height !== h) { meshCanvas.width = w; meshCanvas.height = h; }
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(glProg);
+    const { eye, fwd, right, up, f } = cameraBasis(h);
+    const u = (n) => gl.getUniformLocation(glProg, n);
+    gl.uniform3fv(u("eye"), eye);
+    gl.uniform3fv(u("fwd"), fwd);
+    gl.uniform3fv(u("right"), right);
+    gl.uniform3fv(u("up"), up);
+    gl.uniform2f(u("scale"), (2 * f) / w, (2 * f) / h);
+    const pos = gl.getAttribLocation(glProg, "pos"), nrm = gl.getAttribLocation(glProg, "nrm");
+    gl.enableVertexAttribArray(pos);
+    gl.enableVertexAttribArray(nrm);
+    for (const [link, mesh] of Object.entries(glMeshes)) {
+      const F = frames[link];
+      if (!F) continue;
+      // row-major 4x4 -> the column-major order WebGL wants
+      gl.uniformMatrix4fv(u("model"), false, [0, 1, 2, 3].flatMap((c) => [F[c], F[4 + c], F[8 + c], F[12 + c]]));
+      gl.uniform3fv(u("color"), mesh.color);
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buf);
+      gl.vertexAttribPointer(pos, 3, gl.FLOAT, false, 24, 0);
+      gl.vertexAttribPointer(nrm, 3, gl.FLOAT, false, 24, 12);
+      gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+    }
+    for (const { parts, at: places } of PROPS) {
+      for (const M of places) {
+        gl.uniformMatrix4fv(u("model"), false, [0, 1, 2, 3].flatMap((c) => [M[c], M[4 + c], M[8 + c], M[12 + c]]));
+        for (const part of parts) {
+          gl.uniform3fv(u("color"), part.color);
+          gl.bindBuffer(gl.ARRAY_BUFFER, part.buf);
+          gl.vertexAttribPointer(pos, 3, gl.FLOAT, false, 24, 0);
+          gl.vertexAttribPointer(nrm, 3, gl.FLOAT, false, 24, 12);
+          gl.drawArrays(gl.TRIANGLES, 0, part.count);
+        }
+      }
+    }
+    return Object.keys(glMeshes).length > 0; // props alone: the robot still needs its stick figure
+  }
+
   let lastStatusAt = 0;
   function setStatus() {
     if (!statusEl) return;
@@ -252,7 +589,7 @@
       : 0;
     const total = model ? model.joints.filter((j) => !j.mimic && (j.type === "revolute" || j.type === "prismatic")).length : 0;
     if (source === "preview" && preview) statusEl.textContent =
-      `Preview: ${preview.gesture.name} (${Number(preview.gesture.duration_s).toFixed(1)} s, looping). Not sent to the robot.`;
+      `Preview: ${preview.name} (${preview.total.toFixed(1)} s, looping). Not sent to the robot.`;
     else if (source === "demo") statusEl.textContent = `Demo animation · ${reported}/${total} joints`;
     else if (source === "bridge") statusEl.textContent =
       `Live from ROS 2 bridge · ${reported}/${total} joints · ${lastAge !== null ? `${lastAge.toFixed(1)} s old` : ""}`;
@@ -280,43 +617,77 @@
     }
   }
 
-  // ------------------------------------------------------------------ gesture preview
-  // Plays a planned gesture (GestureTrajectory) on the model. Display only: nothing is sent.
-  let preview = null;
+  // ------------------------------------------------------------------ motion preview
+  // Plays pending motions (MotionPreview: joint points and/or a base path) one after the other, each from
+  // where the last one ended, then loops after a short pause. Each step first eases from that pose to its
+  // first point at a safe speed, as the bridge retimes it (retime_from_current_pose). Display only.
+  const LEAD_SPEED = { body_joint: 0.05, joint_lf: 0.5, joint_rf: 0.5 }; // m/s or strokes/s; others 0.45 rad/s
+  let preview = null; // { steps, total, start, name }
+  let basePose = null; // [x, y, yaw] of the robot while previewing a base move, else null
 
-  function previewPositions(p, nowMs) {
-    const pts = p.gesture.points;
-    const dur = pts[pts.length - 1].t;
-    const t = ((nowMs - p.start) / 1000) % (dur + 1.5); // loop with a short pause at rest
-    const names = p.gesture.joint_names;
-    const start = p.gesture.start_positions && p.gesture.start_positions.length === names.length
-      ? p.gesture.start_positions : names.map(() => 0);
-    const lerp = (a, b, s) => a.map((v, i) => v + s * (b[i] - v));
-    let q;
-    if (t >= dur) {
-      q = pts[pts.length - 1].positions; // short pause on the final pose before looping
-    } else if (t <= pts[0].t) {
-      q = lerp(start, pts[0].positions, pts[0].t > 0 ? t / pts[0].t : 1);
-    } else {
-      let i = 1;
-      while (i < pts.length - 1 && pts[i].t < t) i++;
-      const a = pts[i - 1], b = pts[i];
-      q = lerp(a.positions, b.positions, b.t > a.t ? (t - a.t) / (b.t - a.t) : 1);
+  const composeBase = (b, d) => {
+    const c = Math.cos(b[2]), s = Math.sin(b[2]);
+    return [b[0] + c * d[0] - s * d[1], b[1] + s * d[0] + c * d[1], b[2] + d[2]];
+  };
+
+  function interpRows(rows, t) { // rows [[t, ...values]] with increasing t -> values at t (held past the ends)
+    if (t <= rows[0][0]) return rows[0].slice(1);
+    for (let k = 1; k < rows.length; k++) {
+      if (t <= rows[k][0]) {
+        const a = rows[k - 1], b = rows[k], s = b[0] > a[0] ? (t - a[0]) / (b[0] - a[0]) : 1;
+        return a.slice(1).map((v, i) => v + s * (b[i + 1] - v));
+      }
     }
-    const out = { ...p.base };
-    names.forEach((n, i) => (out[n] = q[i]));
-    return out;
+    return rows[rows.length - 1].slice(1);
   }
 
-  function startPreview(gesture) {
-    if (!gesture || !gesture.points || !gesture.points.length) return;
-    preview = { gesture, start: performance.now(), base: { ...positions } };
+  function startPreview(list) {
+    const steps = [];
+    const pose = { ...positions };
+    let base = [0, 0, 0], total = 0;
+    for (const p of [].concat(list || [])) {
+      if (!p) continue;
+      const names = p.joint_names || [], pts = p.points || [], path = p.base_path || [];
+      if (!pts.length && !path.length) continue;
+      let rows = null;
+      if (pts.length && names.length) {
+        const start = names.map((n, i) => (n in pose ? pose[n] : pts[0].positions[i]));
+        const need = Math.max(0, ...names.map((n, i) => Math.abs(pts[0].positions[i] - start[i]) / (LEAD_SPEED[n] || 0.45)));
+        const lead = Math.max(0, need - pts[0].t);
+        rows = [[0, ...start], ...pts.map((pt) => [pt.t + lead, ...pt.positions])];
+      }
+      const baseRows = path.length ? [[0, 0, 0, 0], ...path] : null;
+      const dur = Math.max(rows ? rows[rows.length - 1][0] : 0, baseRows ? baseRows[baseRows.length - 1][0] : 0);
+      steps.push({ names, rows, baseRows, base0: base.slice(), from: { ...pose }, t0: total, dur });
+      if (rows) names.forEach((n, i) => (pose[n] = rows[rows.length - 1][i + 1]));
+      if (baseRows) base = composeBase(base, baseRows[baseRows.length - 1].slice(1));
+      total += dur;
+    }
+    if (!steps.length) return false;
+    const label = [].concat(list).filter(Boolean).map((p) => p.name).join(" → ");
+    preview = { steps, total, start: performance.now(), name: label };
     if (demoToggle) demoToggle.checked = false;
     lastStatusAt = 0;
+    return true;
   }
+
+  function previewState(nowMs) {
+    const t = ((nowMs - preview.start) / 1000) % (preview.total + 1.5); // loop with a short pause at the end
+    let step = preview.steps[preview.steps.length - 1];
+    for (const s of preview.steps) if (t < s.t0 + s.dur) { step = s; break; }
+    const local = Math.min(t - step.t0, step.dur);
+    const q = { ...step.from };
+    if (step.rows) interpRows(step.rows, local).forEach((v, i) => (q[step.names[i]] = v));
+    const base = step.baseRows ? composeBase(step.base0, interpRows(step.baseRows, local)) : step.base0;
+    return { q, base: base[0] || base[1] || base[2] ? base : null };
+  }
+
+  // Seconds until the preview has played through once (0 when done or not previewing).
+  const previewRemaining = () => (preview ? Math.max(0, preview.total - (performance.now() - preview.start) / 1000) : 0);
 
   function stopPreview() {
     preview = null;
+    basePose = null;
     source = "waiting";
     lastStatusAt = 0;
     pollJoints();
@@ -324,7 +695,9 @@
 
   function frame() {
     if (preview && model) {
-      positions = previewPositions(preview, performance.now());
+      const st = previewState(performance.now());
+      positions = st.q;
+      basePose = st.base;
       source = "preview";
     } else if (demoToggle && demoToggle.checked && model) {
       positions = demoPositions(model, (performance.now() - demoStart) / 1000);
@@ -378,15 +751,16 @@
 
   fetch("/assets/robot_description.urdf")
     .then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.statusText))))
-    .then((text) => { model = parseUrdf(text); })
+    .then((text) => { model = parseUrdf(text); loadMeshes(model); })
     .catch((err) => { if (statusEl) statusEl.textContent = `Could not load the robot model: ${err.message}`; });
 
   setInterval(pollJoints, 200);
   requestAnimationFrame(frame);
   window.PantherRobotView = {
     parseUrdf, forwardKinematics,
-    preview: startPreview,
+    preview: startPreview, // (MotionPreview or a list of them, played in order) -> false if nothing moves
     stopPreview,
     isPreviewing: () => Boolean(preview),
+    previewRemaining,
   };
 })();

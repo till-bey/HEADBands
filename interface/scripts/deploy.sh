@@ -56,14 +56,26 @@ gcloud run services add-iam-policy-binding swiss-asr-service \
 
 ASR_URL="$(gcloud run services describe swiss-asr-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.url)')"
 
+# Secrets, when they exist: the bridge's token, and the web page password (API_AUTH_TOKEN, asked by the page):
+#   printf '%s' 'the-password' | gcloud secrets create api-auth-token --data-file=- --project="${PROJECT_ID}"
+SECRETS=()
+for pair in ROBOT_BRIDGE_SHARED_TOKEN=robot-bridge-shared-token API_AUTH_TOKEN=api-auth-token; do
+  secret="${pair#*=}"
+  if gcloud secrets describe "${secret}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    gcloud secrets add-iam-policy-binding "${secret}" \
+      --project="${PROJECT_ID}" \
+      --member="serviceAccount:${BACKEND_SA}" \
+      --role="roles/secretmanager.secretAccessor" \
+      --quiet >/dev/null || true
+    SECRETS+=("${pair}:latest")
+  fi
+done
+if [[ " ${SECRETS[*]} " != *" API_AUTH_TOKEN="* ]]; then
+  echo "WARNING: no api-auth-token secret: anyone with the URL can move the robot." >&2
+fi
 SECRET_ARGS=()
-if gcloud secrets describe robot-bridge-shared-token --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  gcloud secrets add-iam-policy-binding robot-bridge-shared-token \
-    --project="${PROJECT_ID}" \
-    --member="serviceAccount:${BACKEND_SA}" \
-    --role="roles/secretmanager.secretAccessor" \
-    --quiet >/dev/null || true
-  SECRET_ARGS=("--set-secrets=ROBOT_BRIDGE_SHARED_TOKEN=robot-bridge-shared-token:latest")
+if [[ ${#SECRETS[@]} -gt 0 ]]; then
+  SECRET_ARGS=("--set-secrets=$(IFS=,; echo "${SECRETS[*]}")")
 fi
 
 echo "==> Deploying Swiss Voice & Robotics Backend (swiss-voice-backend)..."

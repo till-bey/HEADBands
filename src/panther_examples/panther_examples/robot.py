@@ -21,7 +21,7 @@ LEFT_GRIPPER_CMD_TOPIC = "/left_gripper/gripper_command"
 RIGHT_GRIPPER_CMD_TOPIC = "/right_gripper/gripper_command"
 LEFT_GRIPPER_STATE_TOPIC = "/left_gripper/joint_states"
 RIGHT_GRIPPER_STATE_TOPIC = "/right_gripper/joint_states"
-RIGHT_GRIPPER_MAX = 0.67  # master_gui closes the right gripper no further (0 open, 1 fully closed)
+RIGHT_GRIPPER_MAX = 1.0  # master_gui closes the right gripper no further (0 open, 1 fully closed)
 
 LIFT_CONTROLLER = "lifting_controller"
 LIFT_CMD_TOPIC = "/lifting_controller/commands"

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 UTC = timezone.utc  # datetime.UTC needs Python 3.11; the ROS Humble container has 3.10
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from swiss_robot_bridge.panther_topics import (
     ARM_JOINT_LIMITS,
@@ -31,8 +32,12 @@ from swiss_robot_bridge.panther_topics import (
     LIFT_MAX_M,
     LIFT_MAX_VEL_MPS,
     LIFT_MIN_M,
-    RETARGETED_FRISBEE_THROW_WAYPOINTS,
+    DEFAULT_THROW,
+    THROW_DIR,
+    THROW_FILES,
+    THROW_PAUSE_S,
     RIGHT_ARM_JOINTS,
+    RIGHT_GRIPPER_MAX,
 )
 
 ALLOWED_LOCAL_ACTIONS = frozenset(
@@ -110,6 +115,55 @@ def check_gesture_locally(
     return names, out
 
 
+ThrowRows = list[tuple[float, tuple[float, ...], float]]
+
+
+def load_throw(path: Path) -> ThrowRows:
+    """Rows (t, (joint_ra0..joint_ra7), joint_rf) of a throw CSV, refused unless every row is well formed: 10 numbers,
+    t from 0 and increasing, arm joints inside their limits, gripper between 0 (open) and 1 (closed)."""
+    rows: ThrowRows = []
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        try:
+            v = [float(x) for x in line.split(",")]
+        except ValueError as exc:
+            raise ValueError(f"{path.name} line {n}: not numbers") from exc
+        if len(v) != 10 or not all(math.isfinite(x) for x in v):
+            raise ValueError(f"{path.name} line {n}: need 10 numbers t,joint_ra0..joint_ra7,joint_rf")
+        if (rows and v[0] <= rows[-1][0]) or (not rows and v[0] != 0.0):
+            raise ValueError(f"{path.name} line {n}: t must start at 0 and increase")
+        for name, q in zip(RIGHT_ARM_JOINTS, v[1:9]):
+            lo, hi = ARM_JOINT_LIMITS[name]
+            if not lo - 1e-3 <= q <= hi + 1e-3:
+                raise ValueError(f"{path.name} line {n}: {name}={q:.3f} outside [{lo}, {hi}]")
+        if not 0.0 <= v[9] <= 1.0:
+            raise ValueError(f"{path.name} line {n}: joint_rf={v[9]} outside [0, 1]")
+        rows.append((v[0], tuple(v[1:9]), v[9]))
+    if len(rows) < 2:
+        raise ValueError(f"{path.name}: fewer than 2 rows")
+    return rows
+
+
+# Loaded once: a missing or bad file stops the bridge at start, never mid-throw.
+THROWS: dict[str, ThrowRows] = {name: load_throw(THROW_DIR / f) for name, f in THROW_FILES.items()}
+
+
+def throw_points(speed: float, variant: str | None = None) -> list[tuple[float, tuple[float, ...], float | None]]:
+    """The throw `variant` (default DEFAULT_THROW) at speed x its CSV's timing, as `cartesian_follow --pause 1`:
+    hold the first row 1 s, send its gripper value, hold 1 s more, then run the rest."""
+    if not (math.isfinite(speed) and speed > 0):
+        raise LocalSafetyRejectedError(f"Throw speed {speed} must be a positive number.")
+    rows = THROWS.get(variant or DEFAULT_THROW)
+    if rows is None:
+        raise LocalSafetyRejectedError(f"Unknown throw version {variant!r}; this bridge has {', '.join(THROWS)}.")
+    pts = [(t / speed, q, g) for t, q, g in rows]
+    q0, g0 = pts[0][1], pts[0][2]
+    return [(0.0, q0, None), (THROW_PAUSE_S, q0, g0)] + [
+        (round(t + 2 * THROW_PAUSE_S, 4), q, g) for t, q, g in pts
+    ]
+
+
 def retime_from_current_pose(
     names: tuple[str, ...],
     points: list[tuple[float, tuple[float, ...], float | None]],
@@ -117,9 +171,11 @@ def retime_from_current_pose(
     max_vel: float = MAX_ARM_JOINT_VEL_RPS * 0.9,
 ) -> list[tuple[float, tuple[float, ...], float | None]]:
     """Delay the trajectory if the arm's actual pose is too far from the first point for max_vel."""
-    if not points or not all(n in current for n in names):
+    # zip: a throw names its gripper (joint_rf) too, but its points hold only the arm positions
+    pairs = list(zip(names, points[0][1])) if points else []
+    if not pairs or not all(n in current for n, _ in pairs):
         return points
-    gap = max(abs(points[0][1][i] - float(current[n])) for i, n in enumerate(names))
+    gap = max(abs(q - float(current[n])) for n, q in pairs)
     needed = gap / max_vel
     shift = max(0.0, needed - points[0][0])
     if shift <= 1e-3:
@@ -174,6 +230,27 @@ class IncomingCloudCommand(BaseModel):
     rationale: str = ""
     head_pitch_rad: float | None = None
     head_yaw_rad: float | None = None
+    throw_variant: str | None = None
+
+
+MANUAL_ID = "manual"
+# The page resends a held base button every 0.1 s; without a new one the base stops after this (page, cloud or link lost).
+MANUAL_BASE_TIMEOUT_S = 0.2
+MANUAL_LIMITS: dict[str, tuple[float, float]] = {
+    **ARM_JOINT_LIMITS,
+    "joint_lf": (GRIPPER_OPEN_POS, GRIPPER_CLOSED_POS),
+    "joint_rf": (GRIPPER_OPEN_POS, RIGHT_GRIPPER_MAX),
+    "body_joint": (LIFT_MIN_M, LIFT_MAX_M),
+}
+
+
+class ManualCommand(BaseModel):
+    """Web UI manual panel: a base jog and/or joint targets (arms, head, grippers 0 open..1 closed, body_joint = lift m)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base: tuple[float, float, float] | None = None  # vx, vy (m/s), wz (rad/s)
+    joints: dict[str, float] = Field(default_factory=dict)
 
 
 def head_bounds(full_range: bool) -> dict[str, tuple[float, float]]:
@@ -241,7 +318,8 @@ class LocalSafetySupervisor:
     min_battery_percent: float = 10.0
     min_front_obstacle_distance_m: float = 0.35
     head_order: str = "pitch_yaw"  # URDF default: joint_head0=pitch, joint_head1=yaw
-    head_full_range: bool = False  # PANTHER_HEAD_FULL_RANGE=1 after checking the head order on the robot
+    head_full_range: bool = True  # PANTHER_HEAD_FULL_RANGE=1 after checking the head order on the robot
+    throw_speed: float = 1.0  # PANTHER_THROW_SPEED: 1 = the CSV's timing, 2 = twice as fast
 
     local_estop_latched: bool = False
     local_fault_active: bool = False
@@ -459,6 +537,68 @@ class LocalSafetySupervisor:
             return "right"
         return "left"
 
+    def check_manual(self, raw: Any) -> ManualCommand:
+        """Re-check a manual panel command locally. Head targets are clamped to the active head range
+        (conservative until PANTHER_HEAD_FULL_RANGE=1); anything else outside its limits is refused."""
+        try:
+            cmd = ManualCommand.model_validate(raw)
+        except ValidationError as exc:
+            raise LocalSafetyRejectedError(f"Malformed manual command: {exc}") from exc
+        if cmd.joints or (cmd.base is not None and TwistSetpoint(*cmd.base).is_nonzero()):
+            if self.local_estop_latched:
+                raise LocalSafetyRejectedError("Local E-Stop is active; motion rejected.")
+            if self.local_fault_active:
+                raise LocalSafetyRejectedError("Local robot fault active; motion rejected.")
+            if self.battery_percent < self.min_battery_percent:
+                raise LocalSafetyRejectedError("Battery below safe local threshold.")
+        head = head_bounds(self.head_full_range)
+        for name, value in cmd.joints.items():
+            if not math.isfinite(value):
+                raise LocalSafetyRejectedError(f"{name} target is not a number.")
+            if name in head:
+                cmd.joints[name] = _clamp(value, *head[name])
+                continue
+            if name not in MANUAL_LIMITS:
+                raise LocalSafetyRejectedError(f"Joint {name!r} cannot be moved from the manual panel.")
+            lo, hi = MANUAL_LIMITS[name]
+            if not lo - 1e-3 <= value <= hi + 1e-3:
+                raise LocalSafetyRejectedError(f"{name}={value:.3f} outside [{lo}, {hi}].")
+            cmd.joints[name] = _clamp(value, lo, hi)
+        if cmd.base is not None:
+            vx, vy, wz = cmd.base
+            if not all(math.isfinite(v) for v in cmd.base):
+                raise LocalSafetyRejectedError("Base speeds must be numbers.")
+            if math.hypot(vx, vy) > self.max_linear_speed_mps + 1e-6 or abs(wz) > self.max_angular_speed_rps + 1e-6:
+                raise LocalSafetyRejectedError(
+                    f"Base speed over the local limit ({self.max_linear_speed_mps} m/s, {self.max_angular_speed_rps} rad/s)."
+                )
+            if (
+                vx > 0.0
+                and self.front_obstacle_distance_m is not None
+                and self.front_obstacle_distance_m < self.min_front_obstacle_distance_m
+            ):
+                raise LocalSafetyRejectedError(
+                    f"Front obstacle at {self.front_obstacle_distance_m:.2f} m; forward motion blocked."
+                )
+        return cmd
+
+    def drive_manual(self, base: tuple[float, float, float], monotonic_now: float) -> TwistSetpoint:
+        """Manual base jog, valid for MANUAL_BASE_TIMEOUT_S unless the next one renews it. A zero jog releases it.
+
+        evaluate_watchdog stops it at the deadline, on E-Stop, cloud timeout or a close front obstacle."""
+        twist = TwistSetpoint(*base)
+        if not twist.is_nonzero():
+            if self.active_command_id == MANUAL_ID:
+                self._clear_active_motion()
+            return TwistSetpoint()
+        if self.active_command_id != MANUAL_ID:
+            self._clear_active_motion(clear_queue=True)  # the operator takes over any planned base move
+        self.active_command_id = MANUAL_ID
+        self._nominal_twist = TwistSetpoint(*base)
+        self.current_twist = twist
+        self.motion_deadline_monotonic = monotonic_now + MANUAL_BASE_TIMEOUT_S
+        return self.current_twist
+
     def validate_and_compute_panther_plan(
         self,
         raw_payload: dict[str, Any],
@@ -589,9 +729,7 @@ class LocalSafetySupervisor:
             plan.head_positions = self._compute_head_joints(cmd)
             plan.head_targets = self._head_targets(cmd)
             plan.master_trajectory_joints = RIGHT_ARM_JOINTS + ("joint_rf",)
-            plan.master_trajectory_points = [
-                (t_s, q_tuple, grip_val) for t_s, q_tuple, grip_val in RETARGETED_FRISBEE_THROW_WAYPOINTS
-            ]
+            plan.master_trajectory_points = throw_points(self.throw_speed, cmd.throw_variant)
             plan.switch_arm_trajectory_controllers = True
             plan.trigger_camera = True
             if cmd.target is not None and cmd.target.z > 0.01:

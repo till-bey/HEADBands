@@ -1,0 +1,21 @@
+{
+ "source": "Chalet by Poly by Google, https://poly.pizza/m/6ufSK2nQBc6, CC BY 3.0",
+ "height_m": 1.0,
+ "parts": [
+  {
+   "file": "roof.stl",
+   "color": "#f6f2ea",
+   "triangles": 127
+  },
+  {
+   "file": "stone.stl",
+   "color": "#9a958c",
+   "triangles": 322
+  },
+  {
+   "file": "wood.stl",
+   "color": "#8a5a36",
+   "triangles": 1028
+  }
+ ]
+}

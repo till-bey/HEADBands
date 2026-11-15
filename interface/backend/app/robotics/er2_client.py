@@ -156,6 +156,7 @@ def _spec_to_proposal(spec: ExplicitClauseSpec, *, fallback_speed: float | None 
         rationale=spec.rationale,
         head_pitch_rad=spec.head_pitch_rad if act == AllowedActionType.MOVE_HEAD else None,
         head_yaw_rad=spec.head_yaw_rad if act == AllowedActionType.MOVE_HEAD else None,
+        throw_variant=spec.throw_variant if act == AllowedActionType.THROW_OBJECT else None,
     )
 
 
@@ -304,8 +305,9 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                     elif spec.action == "rotate" and spec.yaw_rad is not None:
                         if spec.has_explicit_number or prop.yaw_rad is None:
                             prop.yaw_rad = spec.yaw_rad
-                    elif spec.action == "throw_object" and not prop.object_label:
-                        prop.object_label = "frisbee"
+                    elif spec.action == "throw_object":
+                        prop.object_label = prop.object_label or "frisbee"
+                        prop.throw_variant = spec.throw_variant
                     elif spec.action == "move_head":
                         _apply_head_spec(prop, spec)
                 return proposals
@@ -353,8 +355,9 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
                     prop.object_label = None
                 elif spec.action == "rotate" and spec.yaw_rad is not None:
                     prop.yaw_rad = spec.yaw_rad
-                elif spec.action == "throw_object" and not prop.object_label:
-                    prop.object_label = "frisbee"
+                elif spec.action == "throw_object":
+                    prop.object_label = prop.object_label or "frisbee"
+                    prop.throw_variant = spec.throw_variant
                 prop_cursor = j + 1
                 matched = True
                 break
@@ -626,6 +629,7 @@ class MockRoboticsER2Client(RoboticsReasoningProvider):
                             rationale=str(args.get("rationale", clause)),
                             head_pitch_rad=args.get("head_pitch_rad"),
                             head_yaw_rad=args.get("head_yaw_rad"),
+                            throw_variant=args.get("throw_variant"),
                         )
                     )
                 continue

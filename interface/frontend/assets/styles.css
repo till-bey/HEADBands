@@ -1,73 +1,47 @@
 /* Leukerbad Voice & Robotics Assistant — design tokens, light + dark, WCAG 2.2 AA contrast. */
 
 :root {
-  color-scheme: dark;
-  --bg: #0b1120;
-  --surface: #121a2b;
-  --surface-2: #0e1525;
-  --surface-3: #1a2438;
-  --border: #253149;
-  --border-strong: #34425f;
-  --text: #eef2f8;
-  --text-muted: #a3b1c6;          /* 7.4:1 on --surface */
-  --accent: #4f8cff;
-  --accent-strong: #2f6fe8;
-  --accent-text: #ffffff;
-  --accent-soft: rgba(79, 140, 255, 0.14);
+  color-scheme: light; /* one theme: sky-blue panels on a coral sky, navy mountains in front */
+  --bg: #171c30;
+  --surface: #d6eef9;
+  --surface-2: #e8f5fb;
+  --surface-3: #bfe3f5;
+  --border: #a9d3ea;
+  --border-strong: #7fb7d6;
+  --text: #212842;
+  --text-muted: #4a5068;          /* 7.4:1 on --surface */
+  --accent: #212842;
+  --accent-strong: #212842;
+  --accent-text: #f6f2ea;
+  --accent-soft: rgba(33, 40, 66, 0.08);
   --danger: #e5484d;
   --danger-strong: #c8323a;
   --danger-soft: rgba(229, 72, 77, 0.16);
-  --danger-text: #ffb4b6;
+  --danger-text: #a3141b;
   --ok: #30a46c;
   --ok-soft: rgba(48, 164, 108, 0.16);
-  --ok-text: #7ee2a8;
+  --ok-text: #136b3f;
   --warn: #f5a524;
   --warn-soft: rgba(245, 165, 36, 0.14);
-  --warn-text: #ffd27a;
-  --bubble-user: #2551b8;
-  --bubble-user-text: #ffffff;
-  --focus: #9ec1ff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.25);
-  --radius: 14px;
-  --radius-sm: 10px;
+  --warn-text: #7a4900;
+  --bubble-user: #212842;
+  --bubble-user-text: #f6f2ea;
+  --focus: #c2413c;
+  --shadow: 0 1px 2px rgba(33, 40, 66, 0.12), 0 8px 24px rgba(33, 40, 66, 0.18);
+  --radius: 8px;
+  --radius-sm: 6px;
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
   --space-5: 1.5rem;
-  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --display: "Righteous", "Trebuchet MS", sans-serif;
+  --brand: #ec6a65;
+  --ridge: #212842;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-    --bg: #f3f5f9;
-    --surface: #ffffff;
-    --surface-2: #f6f8fb;
-    --surface-3: #eef2f7;
-    --border: #dce2eb;
-    --border-strong: #c3ccd9;
-    --text: #111827;
-    --text-muted: #4b5567;        /* 7.6:1 on white */
-    --accent: #2563eb;
-    --accent-strong: #1d4fd0;
-    --accent-soft: rgba(37, 99, 235, 0.1);
-    --danger: #d92d34;
-    --danger-strong: #b4232a;
-    --danger-soft: rgba(217, 45, 52, 0.1);
-    --danger-text: #a3141b;
-    --ok: #1f8a54;
-    --ok-soft: rgba(31, 138, 84, 0.12);
-    --ok-text: #136b3f;
-    --warn: #b76e00;
-    --warn-soft: rgba(245, 165, 36, 0.16);
-    --warn-text: #7a4900;
-    --bubble-user: #2563eb;
-    --focus: #1d4fd0;
-    --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 6px 18px rgba(16, 24, 40, 0.06);
-  }
-}
 
 *,
 *::before,
@@ -159,7 +133,7 @@ code {
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 30; /* above the manual drawer (20): the emergency stop stays clickable */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -203,9 +177,10 @@ code {
 .swiss-cross::after { width: 7px; height: 22px; }
 
 .brand h1 {
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-family: var(--display);
+  font-size: 1.3rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
 }
 
 .subtitle {
@@ -290,12 +265,14 @@ code {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 1.05rem;
-  font-weight: 650;
+  font-family: var(--display);
+  font-size: 1.25rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
 }
 
 .card-title .icon {
-  color: var(--accent);
+  color: var(--brand);
 }
 
 .section-title {
@@ -741,7 +718,7 @@ input[type="checkbox"] {
   justify-content: center;
   aspect-ratio: 4 / 3;
   overflow: hidden;
-  background: #0b1220;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -757,6 +734,15 @@ input[type="checkbox"] {
   cursor: grab;
   touch-action: none;
   border-radius: var(--radius-sm);
+}
+
+/* robot meshes drawn over the floor grid; the grid canvas below takes the pointer */
+.sim-mesh-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .sim-canvas:active {
@@ -792,7 +778,7 @@ input[type="checkbox"] {
 /* ---------- Small screens ---------- */
 @media (max-width: 640px) {
   .topbar {
-    position: static;
+    position: relative;
   }
 
   .status-cluster {
@@ -836,4 +822,375 @@ input[type="checkbox"] {
   .badge {
     border: 1px solid CanvasText;
   }
+}
+
+/* ---------- Manual control drawer ---------- */
+.manual-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(440px, 100vw);
+  padding: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.25s ease, visibility 0s linear 0.25s;
+}
+
+.manual-drawer #manualStatus:empty {
+  display: none;
+}
+
+.manual-drawer.open {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.25s ease;
+}
+
+.manual-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.manual-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.manual-group legend {
+  padding: 0 var(--space-1);
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.manual-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.manual-vals {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.manual-vals output {
+  display: inline-block;
+  min-width: 3.4em;
+  text-align: right;
+  color: var(--text);
+}
+
+.manual-track {
+  position: relative;
+}
+
+.manual-track input[type="range"] {
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* measured position: thumb is ~16px wide, so its centre runs from 8px to (100% - 8px) */
+.manual-now-mark {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  margin-left: -1.5px;
+  background: var(--warn);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.manual-base {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.manual-jog {
+  min-height: 56px;
+  font-size: 1.4rem;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------- Desktop: conversation and robot panels share a fixed band so camera + simulation fit below ---------- */
+@media (min-width: 1025px) and (min-height: 640px) {
+  .topbar {
+    flex-wrap: nowrap;
+    padding-block: var(--space-2);
+  }
+
+  .topbar .subtitle {
+    display: none;
+  }
+
+  .topbar .status-cluster {
+    flex-wrap: nowrap;
+  }
+
+  .topbar .status-cluster > * {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .topbar .brand {
+    flex: 1 1 auto;
+  }
+
+  .topbar .brand h1 {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .conversation-panel,
+  .robotics-panel {
+    height: 42vh;
+    overflow-y: auto;
+  }
+
+  .conversation-panel {
+    gap: var(--space-3);
+  }
+
+  .chat-timeline {
+    flex: 1 1 auto;
+    min-height: 120px;
+    max-height: none;
+  }
+
+  /* 58vh left for the camera row, minus top bar, grid gaps, card padding, pane headers and status lines */
+  .live-frame {
+    aspect-ratio: auto;
+    height: max(200px, calc(58vh - 270px));
+  }
+}
+
+/* ---------- Password dialog ---------- */
+.auth-dialog {
+  width: min(380px, calc(100vw - 32px));
+  padding: var(--space-5);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.auth-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.auth-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.auth-dialog input[type="password"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.voice-settings .controls-row {
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* ---------- Simple view (default; body.mode-full = Full view, see mode.js) ---------- */
+.simple-confirm {
+  display: none;
+}
+
+.btn-big {
+  min-height: 64px;
+  padding-inline: var(--space-5);
+  font-size: 1.1rem;
+}
+
+body:not(.mode-full) .topbar .subtitle,
+body:not(.mode-full) #wsBadge,
+body:not(.mode-full) #manualToggle,
+body:not(.mode-full) .conversation-panel > :not(.mic-bar),
+body:not(.mode-full) .mic-bar > :not(#micToggleBtn),
+body:not(.mode-full) .robotics-panel > :not(.simple-confirm),
+body:not(.mode-full) .live-pane .card-title,
+body:not(.mode-full) .live-pane-tools,
+body:not(.mode-full) .live-status,
+body:not(.mode-full) #simHelp {
+  display: none;
+}
+
+body:not(.mode-full) .simple-confirm {
+  display: flex;
+}
+
+body:not(.mode-full) .simple-confirm .btn,
+body:not(.mode-full) #micToggleBtn {
+  flex: 1;
+  min-height: 64px;
+  font-size: 1.1rem;
+}
+
+body:not(.mode-full) .mic-bar {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+body:not(.mode-full) .conversation-panel,
+body:not(.mode-full) .robotics-panel {
+  height: auto;
+  overflow: visible;
+  justify-content: center;
+}
+
+@media (min-width: 641px) {
+  body:not(.mode-full) .grid-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+body:not(.mode-full) .live-pane .card-header {
+  display: none; /* camera starts by itself in this view (mode.js) */
+}
+
+/* camera and simulation take the rest of the screen: top bar, the button row and the camera button (~330px) */
+@media (min-width: 641px) {
+  body:not(.mode-full) .live-frame {
+    aspect-ratio: auto;
+    height: max(240px, calc(100vh - 176px)); /* down to the page bottom, under the front mountains */
+  }
+}
+
+a.btn {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---------- Theme: Leukerbad Robotics Carnival deck (navy night, snow, coral, ice; Righteous + Archivo) ---------- */
+.topbar {
+  border-bottom: 3px solid var(--brand);
+}
+
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--accent-strong) 82%, var(--text));
+}
+
+.brand > div {
+  min-width: 0; /* lets the title end in "…" instead of running under the status badges */
+}
+
+/* Scenery: coral evening sky, pink peaks behind the panels, navy peaks with snow in front of them */
+body {
+  background:
+    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 400" preserveAspectRatio="xMidYMax slice"><path fill="%23F7B8AE" d="M0 400V200L120 140L230 190L360 80L480 170L600 110L720 190L860 60L990 160L1110 100L1240 180L1350 120L1440 160V400Z"/></svg>') bottom / 100% 42vh no-repeat fixed,
+    linear-gradient(180deg, #ec6a65 0%, #f29490 75%) fixed;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 15; /* over the panels, under the manual drawer (20) and the top bar (30) */
+  height: 10vh;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 140 1440 260" preserveAspectRatio="none"><path fill="%232B3253" d="M0 400V280L150 200L260 260L420 150L560 260L700 190L840 270L980 160L1120 250L1260 190L1440 260V400Z"/><path fill="%23F6F2EA" d="M420 150L386 174L404 171L418 182L432 170L455 175ZM980 160L948 182L966 179L979 190L992 178L1014 183ZM150 200L124 218L140 216L152 225L163 216L178 219ZM700 190L676 207L690 205L701 213L711 205L726 208ZM1260 190L1236 207L1250 205L1261 213L1271 205L1286 208Z"/><path fill="%23171C30" d="M0 400V330L180 270L320 320L470 250L640 340L800 280L960 340L1130 270L1300 330L1440 300V400Z"/></svg>') bottom / 100% 100% no-repeat;
+  pointer-events: none; /* clicks go through to the panels */
+}
+
+/* room to scroll everything clear of the front mountains */
+.grid-layout {
+  padding-bottom: 10vh;
+}
+
+body:not(.mode-full)::after {
+  height: 16vh; /* taller in the simple view, where only the frames' lower edge is behind them */
+}
+
+.topbar {
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+}
+
+/* simple view: camera and simulation stand on the scenery, no card behind them */
+body:not(.mode-full) .grid-layout {
+  padding-bottom: 0;
+}
+
+body:not(.mode-full) .live-panel {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* simple view: the two actions are plain light-blue buttons on the sky, no panel around them */
+body:not(.mode-full) .conversation-panel,
+body:not(.mode-full) .robotics-panel {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+body:not(.mode-full) #micToggleBtn,
+body:not(.mode-full) #simpleConfirmBtn {
+  color: #212842;
+  background: #67b6de;
+  border: 0;
+  box-shadow: 0 6px 18px rgba(33, 40, 66, 0.25);
+}
+
+body:not(.mode-full) #micToggleBtn:hover,
+body:not(.mode-full) #simpleConfirmBtn:hover:not(:disabled) {
+  background: #7fc3e5;
+}
+
+body:not(.mode-full) #micToggleBtn.btn-recording {
+  color: #fff; /* recording stays red and pulsing */
+  background: var(--danger-strong);
+}
+
+body:not(.mode-full) #simpleConfirmBtn:disabled {
+  opacity: 1; /* solid, so the coral sky does not show through */
+  color: #4a5068;
+  background: #a9d6ec;
+}
+
+/* camera waiting screen in the light blue of the action buttons */
+.live-frame.camera-frame {
+  background: #67b6de;
+}
+
+.camera-frame .live-placeholder {
+  color: #212842;
 }

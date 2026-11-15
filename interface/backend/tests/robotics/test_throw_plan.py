@@ -89,3 +89,41 @@ def test_throw_steps_go_to_the_confirmation_queue() -> None:
     assert dispatched == [False, False]
     pending = [c.action for c in gateway.list_pending_confirmations()]
     assert pending == [AllowedActionType.PICK_OBJECT, AllowedActionType.THROW_OBJECT]
+
+
+@pytest.mark.parametrize(
+    "text, variant",
+    [
+        ("throw the frisbee", None),
+        ("throw the frisbee early", "early"),
+        ("wirf d'Frisbee früe", "early"),
+        ("lance le frisbee plus tôt", "early"),
+        ("早点扔飞盘", "early"),
+    ],
+)
+def test_the_throw_version_is_taken_from_the_words(text: str, variant: str | None) -> None:
+    from app.robotics.action_schema import RobotActionProposal
+    from app.robotics.action_validator import ActionSafetyValidator
+    from app.robotics.intent_parser import parse_explicit_clause_spec, parse_multilingual_robot_intent
+
+    tool, args = parse_multilingual_robot_intent(text)
+    assert (tool, args["action"], args["throw_variant"]) == ("propose_robot_action", "throw_object", variant)
+    assert (variant or "standard") in args["rationale"]
+    spec = parse_explicit_clause_spec(text)
+    assert spec is not None and spec.throw_variant == variant
+    from app.core.config import Settings
+    from app.robotics.action_schema import RobotStatus
+
+    settings = Settings(app_env="test", robot_require_confirmation=True, pubsub_enabled=False)
+    cmd = ActionSafetyValidator(settings).parse_and_validate_proposal(RobotActionProposal(**args), RobotStatus())
+    assert cmd.throw_variant == variant
+
+
+@pytest.mark.parametrize("has_image", [True, False])
+def test_er2_plans_keep_the_throw_version(has_image: bool) -> None:
+    specs = GeminiRoboticsER2Client._build_clause_specs("pick up the frisbee and throw it early")
+    # ER 2 kept the throw, or dropped it (restored from the clause): either way the version survives
+    for er2 in ([_pick(), _throw()], [_pick()]):
+        out = GeminiRoboticsER2Client._enforce_exact_clause_metrics(er2, specs, has_image=has_image)
+        throws = [p for p in out if p.action == AllowedActionType.THROW_OBJECT]
+        assert [t.throw_variant for t in throws] == ["early"]

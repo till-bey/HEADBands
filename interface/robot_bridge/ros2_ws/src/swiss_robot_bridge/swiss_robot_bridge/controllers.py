@@ -5,7 +5,7 @@ clean_up removed the master_controller node (/master_controller/joint_trajectory
   (and the gripper controllers) through the controller_manager services before an arm trajectory, and
   sends each arm its own JointTrajectory (the controller interpolates);
 - streams head positions to head_forward_position_controller, which jumps to every command, by
-  interpolating them every 0.1 s (`TimedStream`), and sends gripper commands at their times.
+  interpolating them every 0.05 s (`TimedStream`), and sends gripper commands at their times.
 
 Nothing here runs without rclpy; the stream logic is plain Python so it can be tested anywhere.
 """

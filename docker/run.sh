@@ -53,7 +53,7 @@ fi
 # Cloud interface bridge settings (docker/bridge.sh): passed through by name only when set on the host,
 # so the token never appears on the docker command line.
 bridge_env=()
-for var in ROBOT_BRIDGE_SHARED_TOKEN ROBOT_GATEWAY_WS_URL ROBOT_ID PANTHER_HEAD_FULL_RANGE PANTHER_HEAD_ORDER \
+for var in ROBOT_BRIDGE_SHARED_TOKEN ROBOT_GATEWAY_WS_URL ROBOT_ID PANTHER_HEAD_FULL_RANGE PANTHER_HEAD_ORDER PANTHER_THROW_SPEED \
            PANTHER_CAMERA_LAUNCH_CMD; do
   if [[ -n "${!var:-}" ]]; then
     bridge_env+=(-e "${var}")

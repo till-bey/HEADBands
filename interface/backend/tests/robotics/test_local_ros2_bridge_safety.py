@@ -499,13 +499,14 @@ def test_headbands_clean_up_throw_trajectory_gripper_sentinel_and_detector() -> 
     hw.apply_panther_plan(throw_plan)
     assert len(hw.last_master_trajectory) == len(throw_plan.master_trajectory_points)
     assert "joint_ra7" in hw.joint_positions
-    # The gripper follows the trajectory: held closed (capped at 0.67 like master_gui) during the swing,
-    # opened only at the release point, never at the start.
-    hw.tick_streams(t0 + 0.06)
-    assert hw.right_gripper_pos == pytest.approx(0.67)
+    # The gripper follows the trajectory: closed (fully, to 1.0) after the first 1 s pause,
+    # held during the swing, opened only at the release point, never at the start.
+    close_t = next(t for t, _q, g in throw_plan.master_trajectory_points if g is not None)
+    hw.tick_streams(t0 + close_t + 0.06)
+    assert hw.right_gripper_pos == pytest.approx(1.0)
     release_t = next(t for t, _q, g in throw_plan.master_trajectory_points if g == 0.0)
     hw.tick_streams(t0 + release_t - 0.2)
-    assert hw.right_gripper_pos == pytest.approx(0.67)
+    assert hw.right_gripper_pos == pytest.approx(1.0)
     hw.tick_streams(t0 + release_t + 0.1)
     assert hw.right_gripper_pos == pytest.approx(0.0)
 
@@ -520,3 +521,75 @@ def test_headbands_clean_up_throw_trajectory_gripper_sentinel_and_detector() -> 
     assert abs(cands[0].cx - 160) <= 5
     assert abs(cands[0].cy - 160) <= 5
 
+
+
+def test_throw_points_play_the_v5_csv_at_speed_after_a_1s_pause() -> None:
+    from swiss_robot_bridge.local_safety import LocalSafetyRejectedError, throw_points
+    from swiss_robot_bridge.local_safety import THROWS
+
+    csv = THROWS["standard"]
+
+    assert len(csv) == 48 and csv[-1][0] == pytest.approx(4.766071)
+    pts = throw_points(2.0)
+    assert pts[0] == (0.0, csv[0][1], None)  # hold the first row 1 s, then its gripper value, then 1 s more
+    assert pts[1] == (1.0, csv[0][1], csv[0][2])
+    assert pts[2][0] == pytest.approx(2.0)
+    assert pts[-1][0] == pytest.approx(2.0 + csv[-1][0] / 2, abs=1e-3)  # twice as fast
+    release = next(t for t, _q, g in pts if g == 0.0)
+    assert release == pytest.approx(2.0 + next(t for t, _q, g in csv if g == 0.0) / 2, abs=1e-3)
+    for bad in (0.0, -1.0, float("nan")):
+        with pytest.raises(LocalSafetyRejectedError):
+            throw_points(bad)
+
+
+def test_throw_is_retimed_from_the_current_pose_with_its_gripper_name() -> None:
+    from swiss_robot_bridge.local_safety import retime_from_current_pose, throw_points
+    from swiss_robot_bridge.panther_topics import RIGHT_ARM_JOINTS
+
+    pts = throw_points(1.0)
+    names = RIGHT_ARM_JOINTS + ("joint_rf",)  # 9 names, 8 positions per point
+    current = {n: q for n, q in zip(RIGHT_ARM_JOINTS, pts[0][1])}
+    assert retime_from_current_pose(names, pts, current) == pts  # already at the start: no delay
+    current["joint_ra3"] -= 0.9  # 0.9 rad away at 0.45 rad/s: 2 s to get there first
+    assert retime_from_current_pose(names, pts, current)[0][0] == pytest.approx(2.0, abs=1e-3)
+
+
+def test_throw_versions_load_from_csv_and_the_early_one_releases_0_2s_sooner() -> None:
+    from swiss_robot_bridge.local_safety import THROWS, LocalSafetyRejectedError, throw_points
+
+    std, early = THROWS["standard"], THROWS["early"]
+    assert [r[0] for r in std] == [r[0] for r in early]  # same timing (standard has its own wrist since v6)
+    opens = lambda rows: next(t for t, _q, g in rows if g == 0.0)  # noqa: E731
+    assert opens(std) - opens(early) == pytest.approx(0.2, abs=0.03)
+    assert throw_points(1.0) == throw_points(1.0, "standard")
+    with pytest.raises(LocalSafetyRejectedError, match="Unknown throw version"):
+        throw_points(1.0, "sideways")
+
+
+@pytest.mark.parametrize(
+    "body, error",
+    [
+        ("0,0,0,0,0,0,0,0,0\n", "need 10 numbers"),
+        ("0.5,0,0,0,0,0,0,0,0,1\n1,0,0,0,0,0,0,0,0,1\n", "start at 0"),
+        ("0,0,0,0,0,0,0,0,0,1\n1,0,0,0,0,0,0,0,0,2\n", "outside \\[0, 1\\]"),
+        ("0,0,0,0,0,-9,0,0,0,1\n1,0,0,0,0,0,0,0,0,1\n", "joint_ra4"),
+    ],
+)
+def test_a_bad_throw_csv_is_refused(tmp_path, body: str, error: str) -> None:
+    from swiss_robot_bridge.local_safety import load_throw
+
+    f = tmp_path / "bad.csv"
+    f.write_text("# t,...\n" + body)
+    with pytest.raises(ValueError, match=error):
+        load_throw(f)
+
+
+def test_the_bridge_takes_the_throw_version_from_the_command() -> None:
+    sup = LocalSafetySupervisor()
+    now = datetime.now(tz=UTC)
+    cmd = {"command_id": "t1", "action": "throw_object", "object_label": "frisbee", "confirmed_by_human": True,
+           "expires_at": (now + timedelta(seconds=30)).isoformat()}
+    opens = lambda plan: next(t for t, _q, g in plan.master_trajectory_points if g == 0.0)  # noqa: E731
+    std = sup.validate_and_compute_panther_plan(cmd, now_utc=now)
+    early = sup.validate_and_compute_panther_plan({**cmd, "command_id": "t2", "throw_variant": "early"}, now_utc=now)
+    assert opens(std) - opens(early) == pytest.approx(0.2, abs=0.03)

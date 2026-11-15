@@ -255,6 +255,7 @@ class AssistantToolExecutor:
                     object_label=str(arguments["object_label"]) if arguments.get("object_label") else None,
                     speed=safe_speed,
                     rationale=str(arguments.get("rationale", "Requested via voice assistant")),
+                    throw_variant=str(arguments["throw_variant"]) if arguments.get("throw_variant") else None,
                 )
                 validated, dispatched = await self._gateway.submit_proposal(proposal)
                 cmd_json = validated.model_dump(mode="json")

@@ -9,7 +9,7 @@ It drives the robot's own controllers, nothing to install on the robot:
   jumps to each command. Grippers: /left_gripper and /right_gripper/gripper_command. Closing the window switches the
   controllers back as they were.
 - Sliders are sent on release, timed so no joint goes over MAX_JOINT_VEL (grippers: a stroke per second). The right
-  gripper closes no further than RIGHT_GRIPPER_MAX (0.67), also when a file asks for more.
+  gripper closes no further than RIGHT_GRIPPER_MAX (1.0), also when a file asks for more.
 - Lift: /lifting_controller/commands on release (the lift has no ros2_control command interface).
 - Base: hold a button to publish /cmd_vel at 10 Hz; releasing it, or leaving the window, stops the base.
 - Record: samples the 20 joints and the lift at 10 Hz from the robot's state (however they move) into
@@ -469,13 +469,16 @@ def start(node):
     for topic, joint in ((LIFT_STATE_TOPIC, "body_joint"), (LEFT_GRIPPER_STATE_TOPIC, "joint_lf"),
                          (RIGHT_GRIPPER_STATE_TOPIC, "joint_rf")):
         node.create_subscription(JointState, topic, lambda m, j=joint: store_single(now, j, m), 10)
-    for _ in range(50):
+    # 5 s of wall time, not a count of spin_once calls: each takes one message, and with ~5 topics at 100 Hz
+    # 50 calls is ~0.4 s, too short to catch a valid right-gripper reading (most of them are -32.767).
+    deadline = time.monotonic() + 5.0
+    while True:
         missing = [n for n in JOINTS + ["body_joint"] if n not in now] + ([] if "urdf" in got else ["/robot_description"])
         if not missing:
             break
+        if time.monotonic() > deadline:
+            sys.exit(f"no state for {missing} in 5 s: wrong ROS_DOMAIN_ID or RMW, or that part sends no valid reading?")
         rclpy.spin_once(node, timeout_sec=0.1)
-    else:
-        sys.exit(f"no state for {missing}: wrong ROS_DOMAIN_ID or RMW?")
     urdf = {j.get("name"): j.find("limit") for j in ET.fromstring(got["urdf"]).findall("joint")}
     limits = {n: (float(urdf[n].get("lower")), float(urdf[n].get("upper"))) for n in LEFT_ARM + RIGHT_ARM + HEAD}
     limits.update({"joint_lf": (0.0, 1.0), "joint_rf": (0.0, RIGHT_GRIPPER_MAX)})
