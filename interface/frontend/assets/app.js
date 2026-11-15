@@ -389,6 +389,63 @@
     } catch (_) {}
   }
 
+  // ---------- Generated gestures ----------
+  const previewedGestures = new Set();
+  const gestureForm = document.getElementById("gestureForm");
+  const gestureInput = document.getElementById("gestureInput");
+
+  function describeGesture(g) {
+    const parts = [`${Number(g.duration_s).toFixed(1)} s`, `${(g.arms || []).join(" + ")} arm`];
+    parts.push(`peak ${Number(g.peak_joint_vel_rps).toFixed(2)} rad/s`);
+    if (g.min_clearance_m !== null && g.min_clearance_m !== undefined) {
+      parts.push(`closest to body ${(Number(g.min_clearance_m) * 100).toFixed(0)} cm`);
+    }
+    return parts.join(" · ");
+  }
+
+  function previewGesture(gesture, scroll = false) {
+    if (!window.PantherRobotView || !window.PantherRobotView.preview) return;
+    window.PantherRobotView.preview(gesture);
+    if (scroll) {
+      const sim = document.getElementById("simCanvas");
+      if (sim) sim.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  if (gestureForm) {
+    gestureForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const description = gestureInput.value.trim();
+      if (!description) return;
+      const submitBtn = gestureForm.querySelector("button[type=submit]");
+      submitBtn.disabled = true;
+      er2Output.textContent = `Planning "${description}"…`;
+      try {
+        const res = await fetch("/api/v1/robotics/gesture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          er2Output.textContent = `Gesture not planned: ${data.detail || res.statusText}`;
+          return;
+        }
+        const cmd = data.command;
+        previewedGestures.add(cmd.command_id);
+        previewGesture(cmd.gesture);
+        er2Output.textContent =
+          `Planned "${cmd.gesture.name}": ${describeGesture(cmd.gesture)}. ` +
+          "Previewing in Simulation. Confirm it under “Waiting for your confirmation” to run it on the robot.";
+        refreshRobotStatus();
+      } catch (err) {
+        er2Output.textContent = `Gesture request failed: ${err.message}`;
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
   function renderConfirmations(pending) {
     confirmationsList.innerHTML = "";
     if (pending.length === 0) {
@@ -420,8 +477,17 @@
       card.className = "confirm-card";
 
       const titleEl = document.createElement("strong");
-      titleEl.textContent = pending.length > 1 ? `Step ${idx + 1}: ${cmd.action}` : cmd.action;
+      const label = cmd.gesture ? `gesture: ${cmd.gesture.name}` : cmd.action;
+      titleEl.textContent = pending.length > 1 ? `Step ${idx + 1}: ${label}` : label;
       card.appendChild(titleEl);
+
+      if (cmd.gesture) {
+        card.appendChild(document.createTextNode(` ${describeGesture(cmd.gesture)}`));
+        if (!previewedGestures.has(cmd.command_id)) {
+          previewedGestures.add(cmd.command_id);
+          previewGesture(cmd.gesture);
+        }
+      }
 
       const paramParts = [];
       if (cmd.target) {
@@ -433,12 +499,12 @@
         const deg = Math.round((Number(cmd.yaw_rad) * 180) / Math.PI);
         paramParts.push(`yaw=${deg}° (${Number(cmd.yaw_rad).toFixed(2)} rad)`);
       }
-      if (cmd.object_label) {
+      if (cmd.object_label && !cmd.gesture) {
         paramParts.push(`object="${cmd.object_label}"`);
       }
-      paramParts.push(`speed=${cmd.speed} m/s`);
+      if (!cmd.gesture) paramParts.push(`speed=${cmd.speed} m/s`);
 
-      card.appendChild(document.createTextNode(` ${paramParts.join(" · ")}`));
+      if (paramParts.length) card.appendChild(document.createTextNode(` ${paramParts.join(" · ")}`));
       if (cmd.rationale) {
         card.appendChild(document.createElement("br"));
         const ratEl = document.createElement("span");
@@ -468,6 +534,15 @@
 
       actions.appendChild(approveBtn);
       actions.appendChild(rejectBtn);
+      if (cmd.gesture) {
+        const previewBtn = document.createElement("button");
+        previewBtn.className = "btn btn-ghost";
+        previewBtn.type = "button";
+        previewBtn.textContent = "Preview";
+        previewBtn.setAttribute("aria-label", `Preview gesture ${cmd.gesture.name} in the simulation`);
+        previewBtn.onclick = () => previewGesture(cmd.gesture, true);
+        actions.appendChild(previewBtn);
+      }
       card.appendChild(actions);
       confirmationsList.appendChild(card);
     });

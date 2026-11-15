@@ -251,7 +251,9 @@
       ? model.joints.filter((j) => !j.mimic && (j.type === "revolute" || j.type === "prismatic") && j.name in positions).length
       : 0;
     const total = model ? model.joints.filter((j) => !j.mimic && (j.type === "revolute" || j.type === "prismatic")).length : 0;
-    if (source === "demo") statusEl.textContent = `Demo animation · ${reported}/${total} joints`;
+    if (source === "preview" && preview) statusEl.textContent =
+      `Preview: ${preview.gesture.name} (${Number(preview.gesture.duration_s).toFixed(1)} s, looping). Not sent to the robot.`;
+    else if (source === "demo") statusEl.textContent = `Demo animation · ${reported}/${total} joints`;
     else if (source === "bridge") statusEl.textContent =
       `Live from ROS 2 bridge · ${reported}/${total} joints · ${lastAge !== null ? `${lastAge.toFixed(1)} s old` : ""}`;
     else if (source === "stale") statusEl.textContent =
@@ -261,7 +263,7 @@
 
   // ------------------------------------------------------------------ data
   async function pollJoints() {
-    if (document.hidden || (demoToggle && demoToggle.checked)) return;
+    if (document.hidden || preview || (demoToggle && demoToggle.checked)) return;
     try {
       const res = await fetch("/api/v1/robotics/joints");
       if (!res.ok) return;
@@ -278,8 +280,53 @@
     }
   }
 
+  // ------------------------------------------------------------------ gesture preview
+  // Plays a planned gesture (GestureTrajectory) on the model. Display only: nothing is sent.
+  let preview = null;
+
+  function previewPositions(p, nowMs) {
+    const pts = p.gesture.points;
+    const dur = pts[pts.length - 1].t;
+    const t = ((nowMs - p.start) / 1000) % (dur + 1.5); // loop with a short pause at rest
+    const names = p.gesture.joint_names;
+    const start = p.gesture.start_positions && p.gesture.start_positions.length === names.length
+      ? p.gesture.start_positions : names.map(() => 0);
+    const lerp = (a, b, s) => a.map((v, i) => v + s * (b[i] - v));
+    let q;
+    if (t >= dur) {
+      q = pts[pts.length - 1].positions; // short pause on the final pose before looping
+    } else if (t <= pts[0].t) {
+      q = lerp(start, pts[0].positions, pts[0].t > 0 ? t / pts[0].t : 1);
+    } else {
+      let i = 1;
+      while (i < pts.length - 1 && pts[i].t < t) i++;
+      const a = pts[i - 1], b = pts[i];
+      q = lerp(a.positions, b.positions, b.t > a.t ? (t - a.t) / (b.t - a.t) : 1);
+    }
+    const out = { ...p.base };
+    names.forEach((n, i) => (out[n] = q[i]));
+    return out;
+  }
+
+  function startPreview(gesture) {
+    if (!gesture || !gesture.points || !gesture.points.length) return;
+    preview = { gesture, start: performance.now(), base: { ...positions } };
+    if (demoToggle) demoToggle.checked = false;
+    lastStatusAt = 0;
+  }
+
+  function stopPreview() {
+    preview = null;
+    source = "waiting";
+    lastStatusAt = 0;
+    pollJoints();
+  }
+
   function frame() {
-    if (demoToggle && demoToggle.checked && model) {
+    if (preview && model) {
+      positions = previewPositions(preview, performance.now());
+      source = "preview";
+    } else if (demoToggle && demoToggle.checked && model) {
       positions = demoPositions(model, (performance.now() - demoStart) / 1000);
       source = "demo";
     }
@@ -324,16 +371,22 @@
   });
   if (resetBtn) resetBtn.addEventListener("click", () => Object.assign(view, DEFAULT_VIEW));
   if (demoToggle) demoToggle.addEventListener("change", () => {
+    if (demoToggle.checked) preview = null;
     demoStart = performance.now();
     if (!demoToggle.checked) { positions = {}; source = "waiting"; pollJoints(); }
   });
 
-  fetch("/assets/panther.urdf")
+  fetch("/assets/robot_description.urdf")
     .then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.statusText))))
     .then((text) => { model = parseUrdf(text); })
     .catch((err) => { if (statusEl) statusEl.textContent = `Could not load the robot model: ${err.message}`; });
 
   setInterval(pollJoints, 200);
   requestAnimationFrame(frame);
-  window.PantherRobotView = { parseUrdf, forwardKinematics }; // for debugging in the console
+  window.PantherRobotView = {
+    parseUrdf, forwardKinematics,
+    preview: startPreview,
+    stopPreview,
+    isPreviewing: () => Boolean(preview),
+  };
 })();

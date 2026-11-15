@@ -23,7 +23,9 @@ def get_tool_declarations() -> list[dict[str, Any]]:
             "description": (
                 "Delegate ANY physical robot action, movement, multi-step navigation, rotation, return-home, "
                 "stop, head look-at, camera scene inspection ('what do you see?', 'where is the frisbee?', "
-                "'is the path clear?'), pick/gripper grasp, or place/gripper release task on the UniX AI Panther "
+                "'is the path clear?'), pick/gripper grasp, place/gripper release, frisbee throw, or expressive arm "
+                "gesture ('salute', 'wave hello', 'point at the door', 'raise both arms', 'salutier', 'fais un salut') "
+                "task on the UniX AI Panther "
                 "robot to Gemini Robotics ER 2 (even if the user omits the word 'robot', e.g. 'go forward 5m', "
                 "'move forward 5 m and turn around', 'look around and find the frisbee', 'geh 5 Meter vorwärts "
                 "und dreh dich um', 'avance de 5 mètres et fais demi-tour', 'gang 5 Meter füre und dräi dich ume', "

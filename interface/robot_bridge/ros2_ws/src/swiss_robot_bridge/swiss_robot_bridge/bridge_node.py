@@ -19,6 +19,7 @@ from swiss_robot_bridge.local_safety import (
     LocalSafetySupervisor,
     PantherActuationPlan,
     TwistSetpoint,
+    retime_from_current_pose,
 )
 from swiss_robot_bridge.panther_topics import (
     PANTHER_COMMAND_TOPICS,
@@ -103,6 +104,8 @@ class ROS2HardwareAdapter:
         self.right_gripper_pos: float | None = None
         self.head_joints_rad: list[float] | None = None
         self.last_master_trajectory: list[tuple[float, tuple[float, ...], float | None]] = []
+        self._arm_traj_joints: tuple[str, ...] = ()
+        self._arm_traj_until: float = 0.0  # monotonic end of the arm trajectory being played
         self.last_published_topics: list[str] = list(PANTHER_COMMAND_TOPICS)
         # Every joint position seen on the state topics, for the Web UI simulation view (read-only).
         # The lift and gripper state topics have no joint names on the robot, so they are stored
@@ -393,6 +396,29 @@ class ROS2HardwareAdapter:
         self.publish_twist(TwistSetpoint(0.0, 0.0, 0.0))
         if self._preempt_pub is not None and self._empty_cls is not None:
             self._preempt_pub.publish(self._empty_cls())
+        self.hold_arms_if_moving()
+
+    def hold_arms_if_moving(self) -> None:
+        """Stop an arm trajectory still playing (throw or gesture): replace it with 'hold here'.
+
+        master_controller replaces the pending points of the joints a new trajectory names, so a
+        single point at the measured position, 0.3 s out, freezes the arm where it is.
+        """
+        if not self._arm_traj_joints or time.monotonic() > self._arm_traj_until:
+            return
+        joints = [j for j in self._arm_traj_joints if j in self.joint_positions]
+        self._arm_traj_until = 0.0
+        if not joints or self._master_traj_pub is None or self._joint_traj_cls is None:
+            return
+        msg = self._joint_traj_cls()
+        msg.joint_names = joints
+        pt = self._joint_traj_point_cls()
+        pt.positions = [float(self.joint_positions[j]) for j in joints]
+        pt.time_from_start.sec = 0
+        pt.time_from_start.nanosec = 300_000_000
+        msg.points.append(pt)
+        self._master_traj_pub.publish(msg)
+        logger.warning("Arm trajectory interrupted: holding %d joints at their measured position", len(joints))
 
     def publish_head(self, head0_rad: float, head1_rad: float) -> None:
         self.head_joints_rad = [round(float(head0_rad), 4), round(float(head1_rad), 4)]
@@ -431,10 +457,15 @@ class ROS2HardwareAdapter:
         if not plan.master_trajectory_points:
             return
         self.last_master_trajectory = list(plan.master_trajectory_points)
+        traj_joints = tuple(plan.master_trajectory_joints or (RIGHT_ARM_JOINTS + ("joint_rf",)))
+        arm_joints = tuple(j for j in traj_joints if j.startswith(("joint_la", "joint_ra")))
+        self._arm_traj_joints = arm_joints
+        self._arm_traj_until = time.monotonic() + float(plan.master_trajectory_points[-1][0]) + 0.5
         final_pt = plan.master_trajectory_points[-1]
         if final_pt[2] is not None:
             self.right_gripper_pos = round(float(final_pt[2]), 3)
-        self._record_joints(dict(zip(RIGHT_ARM_JOINTS, final_pt[1], strict=False)))
+        if self.sim_mode:  # no ROS: show the end pose; with ROS, /joint_states reports the real motion
+            self._record_joints(dict(zip(arm_joints, final_pt[1], strict=False)))
 
         if self._joint_traj_cls is None or self._joint_traj_point_cls is None:
             return
@@ -457,7 +488,9 @@ class ROS2HardwareAdapter:
                 master_msg.points.append(pt)
             self._master_traj_pub.publish(master_msg)
 
-        if self._right_arm_traj_pub is not None:
+        # The throw is also sent straight to the right-arm controller; generated gestures go through
+        # master_controller only, since they may use either arm.
+        if self._right_arm_traj_pub is not None and plan.action != "generated_gesture":
             arm_msg = self._joint_traj_cls()
             arm_msg.joint_names = list(RIGHT_ARM_JOINTS)
             for t_s, arm_q, _ in plan.master_trajectory_points:
@@ -486,6 +519,11 @@ class ROS2HardwareAdapter:
             self.publish_lift(plan.lift_position_m, plan.lift_velocity_mps)
 
         if plan.master_trajectory_points:
+            if plan.action == "generated_gesture" and plan.master_trajectory_joints:
+                # Planned from the pose the cloud last saw; give the arm time to reach the first point.
+                plan.master_trajectory_points = retime_from_current_pose(
+                    tuple(plan.master_trajectory_joints), plan.master_trajectory_points, self.joint_positions
+                )
             self.publish_master_trajectory(plan)
 
         if plan.gripper_side is not None and plan.gripper_position is not None:

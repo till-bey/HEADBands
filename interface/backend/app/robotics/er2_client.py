@@ -78,12 +78,13 @@ Robot hardware capabilities (mapped deterministically downstream by the local RO
 - Vertical torso lift: `target.z` in [0.0, 0.80] meters (`LIFT_VEL = 0.05` m/s).
 - 2-DOF pan/tilt head with Orbbec Gemini 2 RGB-D camera: `look_at` or `inspect_object` aims the head camera and captures a frame without wheel motion (`requires_confirmation=false`).
 - Dual 8-DOF OpenArm manipulators + parallel grippers (`joint_la0..7`, `joint_ra0..7`, `joint_lf`, `joint_rf` via `/master_controller/joint_trajectory`): `pick_object` closes the gripper to grasp (`requires_confirmation=true`), `place_object` opens the gripper to release (`requires_confirmation=true`), and `throw_object` executes the retargeted right-arm frisbee throw trajectory with automatic gripper release (`requires_confirmation=true`). Mention "left" or "right" in `rationale` when a specific side is requested.
+- Expressive arm gestures with no dedicated action (salute, wave, point at something, raise one or both arms, thumbs-up pose, bow the arms, greet): `generated_gesture` with `object_label` = a short plain-English description of the gesture including which arm (e.g. "salute with the right hand", "wave hello with the right hand", "raise both arms"), `target=null`, `yaw_rad=null`, `speed=0.2`, `requires_confirmation=true`. A downstream planner designs and checks the motion; never describe joint angles.
 
 Given an operator task instruction, current robot status, and optional live Panther camera image:
 1. Summarize the task/scene concisely in `scene_summary` (describe visible objects, floor clearance, and distances when a camera image is provided) and note safety observations.
 2. When a camera image is provided, detect relevant objects (frisbees, bottles, obstacles, targets) with normalized [y, x] points and [ymin, xmin, ymax, xmax] boxes in [0, 1000].
 3. Decompose single-step AND multi-step instructions into an ordered sequence of high-level proposals using ONLY:
-   move_to, rotate, look_at, inspect_object, pick_object, place_object, throw_object, return_home, stop.
+   move_to, rotate, look_at, inspect_object, pick_object, place_object, throw_object, generated_gesture, return_home, stop.
 4. Conventions:
    - move_to: +x = forward (m), -x = backward (m), +y = left (m), -y = right (m), z = torso lift height in [0.0, 0.8] m (default 0.0).
    - rotate: yaw_rad in [-3.14159, +3.14159] (+1.5708 = 90 deg left/CCW, -1.5708 = 90 deg right/CW, 3.14159 = 180 deg turn around).
@@ -341,6 +342,12 @@ class GeminiRoboticsER2Client(RoboticsReasoningProvider):
             elif proposal.action == AllowedActionType.ROTATE:
                 proposal.target = None
                 proposal.object_label = None
+            elif proposal.action == AllowedActionType.GENERATED_GESTURE:
+                proposal.target = None
+                proposal.yaw_rad = None
+                proposal.requires_confirmation = True
+                if not proposal.object_label:
+                    proposal.object_label = (proposal.rationale or "gesture")[:120]
             elif proposal.action in {
                 AllowedActionType.INSPECT_OBJECT,
                 AllowedActionType.PICK_OBJECT,
@@ -432,6 +439,14 @@ _CLAUSE_SPLIT_RE = re.compile(
 )
 
 
+_MOCK_GESTURE_RE = re.compile(
+    r"\b(salut\w*|wave|waving|wink\w*|greet\w*|point\s+(?:at|to)|raise\s+(?:your\s+|both\s+|the\s+)?(?:arms?|hands?)"
+    r"|hands\s+up|thumbs?\s+up|winke\w*|gruess\w*|grüss\w*|salü|zeig\w*\s+auf|heb\w*\s+(?:die|beide)\s+arme"
+    r"|salue\w*|saluda\w*|señala\w*|mávn\w*|zamávej|pozdrav\w*)\b|(敬礼|挥手|揮手|举手|舉手)",
+    re.IGNORECASE,
+)
+
+
 class MockRoboticsER2Client(RoboticsReasoningProvider):
     """Deterministic multi-step spatial reasoning mock for offline development and automated safety testing."""
 
@@ -468,6 +483,17 @@ class MockRoboticsER2Client(RoboticsReasoningProvider):
         proposals: list[RobotActionProposal] = []
 
         for clause in clauses:
+            if _MOCK_GESTURE_RE.search(clause):
+                proposals.append(
+                    RobotActionProposal(
+                        action=AllowedActionType.GENERATED_GESTURE,
+                        object_label=clause[:120],
+                        speed=0.2,
+                        requires_confirmation=True,
+                        rationale=f"Generated arm gesture: {clause[:120]}",
+                    )
+                )
+                continue
             parsed_intent = parse_multilingual_robot_intent(clause)
             if parsed_intent is not None:
                 t_name, args = parsed_intent

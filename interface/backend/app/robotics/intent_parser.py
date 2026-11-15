@@ -1432,6 +1432,25 @@ def _describe_single_step(cmd: dict[str, Any], language: str) -> str:
             return f"{tgt_name} mit em rächte Arm rüehre"
         return f"{tgt_name} mit dem rechten Arm werfen"
 
+    if action == "generated_gesture":
+        gesture = cmd.get("gesture") or {}
+        name = str(gesture.get("name") or obj or "gesture").replace("_", " ")
+        if is_zh_tw:
+            return f"手勢：{name}"
+        if is_zh:
+            return f"手势：{name}"
+        if is_es:
+            return f"gesto: {name}"
+        if is_cs:
+            return f"gesto: {name}"
+        if is_fr:
+            return f"geste : {name}"
+        if is_en:
+            return f"gesture: {name}"
+        if is_gsw:
+            return f"Gescht: {name}"
+        return f"Geste: {name}"
+
     label_part = f" ({obj})" if obj else ""
     return f"{action}{label_part}"
 

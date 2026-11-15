@@ -147,6 +147,20 @@
         </p>
       </details>
 
+      <form id="gestureForm" class="er2-form" aria-describedby="gestureHint">
+        <div class="field-label">
+          <label for="gestureInput">Gesture</label>
+          <span id="gestureHint" class="field-hint">Describe any arm gesture, like "salute", "wave hello" or "point at the door". It is planned, checked and previewed in Simulation; nothing moves until you confirm it below.</span>
+          <div class="text-turn-form">
+            <input id="gestureInput" type="text" placeholder="salute with the right hand" autocomplete="off" required />
+            <button class="btn btn-primary" type="submit">
+              <svg class="icon" aria-hidden="true"><use href="#i-robot"/></svg>
+              Plan gesture
+            </button>
+          </div>
+        </div>
+      </form>
+
       <form id="er2Form" class="er2-form">
         <label for="er2Instruction">
           Task or spatial instruction

@@ -30,6 +30,7 @@ class AllowedActionType(StrEnum):
     PICK_OBJECT = "pick_object"
     PLACE_OBJECT = "place_object"
     THROW_OBJECT = "throw_object"
+    GENERATED_GESTURE = "generated_gesture"
     RETURN_HOME = "return_home"
     STOP = "stop"
 
@@ -41,9 +42,40 @@ DANGEROUS_ACTIONS_REQUIRING_CONFIRMATION: frozenset[AllowedActionType] = frozens
         AllowedActionType.PICK_OBJECT,
         AllowedActionType.PLACE_OBJECT,
         AllowedActionType.THROW_OBJECT,
+        AllowedActionType.GENERATED_GESTURE,
         AllowedActionType.RETURN_HOME,
     }
 )
+
+
+class GestureTrajectoryPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    t: float = Field(description="Seconds from the start of playback.")
+    positions: list[float]
+
+
+class GestureTrajectory(BaseModel):
+    """Arm joint trajectory planned by `gesture_planner` from a language description.
+
+    Never produced by a language model directly: the model only gives hand keyframes, the
+    planner solves IK and checks limits, speed and clearance, and the validator re-checks.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(max_length=60)
+    description: str = Field(default="", max_length=200)
+    summary: str = Field(default="", max_length=240)
+    arms: list[str] = Field(default_factory=list, max_length=2)
+    joint_names: list[str] = Field(max_length=16)
+    points: list[GestureTrajectoryPoint] = Field(max_length=600)
+    start_positions: list[float] = Field(default_factory=list, max_length=16)
+    keyframes: list[dict] = Field(default_factory=list, max_length=16)
+    duration_s: float
+    peak_joint_vel_rps: float
+    min_clearance_m: float | None = None
+    time_scale: float = 1.0
 
 
 class RobotOperationalState(StrEnum):
@@ -150,6 +182,7 @@ class ValidatedRobotCommand(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     expires_at: datetime
     rationale: str = ""
+    gesture: GestureTrajectory | None = None
 
 
 class RoboticsReasoningResult(BaseModel):

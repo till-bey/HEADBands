@@ -100,6 +100,17 @@ GRIPPER_DEFAULT_VEL = 0.5  # GRIPPER_VEL = 0.5 strokes/s in master_controller.py
 
 MAX_ARM_JOINT_VEL_RPS = 0.5  # MAX_JOINT_VEL = 0.5 rad/s in cartesian_follow.py
 
+# URDF limits (src/panther_sim/urdf/robot_description.urdf), re-checked locally for generated gestures.
+ARM_JOINT_LIMITS: dict[str, tuple[float, float]] = {
+    "joint_la0": (-1.046, 0.697), "joint_la1": (-3.14, 0.785), "joint_la2": (0.0, 1.57),
+    "joint_la3": (-2.79, 2.79), "joint_la4": (-2.23, 0.0), "joint_la5": (-2.79, 2.79),
+    "joint_la6": (-0.87, 0.87), "joint_la7": (-0.69, 0.69),
+    "joint_ra0": (-0.697, 1.046), "joint_ra1": (-3.14, 0.785), "joint_ra2": (-1.57, 0.0),
+    "joint_ra3": (-2.79, 2.79), "joint_ra4": (-2.23, 0.0), "joint_ra5": (-2.79, 2.79),
+    "joint_ra6": (-0.87, 0.87), "joint_ra7": (-1.57, 1.57),
+}
+GESTURE_MAX_DURATION_S = 30.0
+
 # PR #521 conservative head bounds: pitch in [-0.34, +0.34] rad, yaw in [-1.20, +1.20] rad
 HEAD_PITCH_MIN_RAD = -0.34
 HEAD_PITCH_MAX_RAD = 0.34

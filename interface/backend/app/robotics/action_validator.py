@@ -13,11 +13,17 @@ from app.core.config import Settings
 from app.robotics.action_schema import (
     DANGEROUS_ACTIONS_REQUIRING_CONFIRMATION,
     AllowedActionType,
+    GestureTrajectory,
     RobotActionProposal,
     RobotOperationalState,
     RobotStatus,
     ValidatedRobotCommand,
 )
+from app.robotics.gesture_planner import MAX_DURATION_S as GESTURE_MAX_DURATION_S
+from app.robotics.gesture_planner import joint_limits as gesture_joint_limits
+
+# Hard cap re-checked here and on the robot bridge; the planner targets 0.45 rad/s.
+GESTURE_MAX_JOINT_VEL_RPS = 0.5
 
 # Rule 1 & 2: Patterns indicative of code injection or direct ROS topic injection
 _FORBIDDEN_CODE_OR_TOPIC_RE = re.compile(
@@ -44,6 +50,7 @@ class ActionSafetyValidator:
         raw_proposal: dict[str, Any] | RobotActionProposal,
         robot_status: RobotStatus,
         require_active_bridge_watchdog: bool = False,
+        gesture: GestureTrajectory | None = None,
     ) -> ValidatedRobotCommand:
         """Validate proposal structure, bounds, robot safety state, watchdog, and confirmation flag."""
         # Rule 2 & 3: Reject unknown fields (such as raw 'ros_topic' or 'script') & unknown action names
@@ -83,6 +90,15 @@ class ActionSafetyValidator:
         }:
             if not proposal.object_label and proposal.target is None:
                 raise SafetyValidationError(f"Action '{proposal.action}' requires 'object_label' or 'target'.")
+
+        if proposal.action == AllowedActionType.GENERATED_GESTURE:
+            if not proposal.object_label:
+                raise SafetyValidationError("Action 'generated_gesture' requires a gesture description in 'object_label'.")
+            if gesture is None:
+                raise SafetyValidationError("Action 'generated_gesture' has no planned trajectory.")
+            self.assert_gesture_trajectory_safe(gesture)
+        elif gesture is not None:
+            raise SafetyValidationError("A gesture trajectory is only allowed on 'generated_gesture'.")
 
         if proposal.target is not None:
             coords = (proposal.target.x, proposal.target.y, proposal.target.z)
@@ -139,7 +155,44 @@ class ActionSafetyValidator:
             created_at=now,
             expires_at=expires_at,
             rationale=proposal.rationale,
+            gesture=gesture,
         )
+
+    def assert_gesture_trajectory_safe(self, gesture: GestureTrajectory) -> None:
+        """Independent re-check of a planned gesture: joints, limits, timing and joint speed."""
+        limits = gesture_joint_limits()
+        names = gesture.joint_names
+        if not names or len(set(names)) != len(names):
+            raise SafetyValidationError("Gesture joint names are empty or repeated.")
+        unknown = [n for n in names if n not in limits]
+        if unknown:
+            raise SafetyValidationError(f"Gesture names joints outside the arms: {unknown}.")
+        if not gesture.points:
+            raise SafetyValidationError("Gesture trajectory has no points.")
+        if len(gesture.start_positions) not in (0, len(names)):
+            raise SafetyValidationError("Gesture start pose does not match its joints.")
+        prev_t = 0.0
+        prev_q = gesture.start_positions or None
+        peak = 0.0
+        for i, pt in enumerate(gesture.points):
+            if len(pt.positions) != len(names):
+                raise SafetyValidationError(f"Gesture point {i} has {len(pt.positions)} values for {len(names)} joints.")
+            if not math.isfinite(pt.t) or pt.t <= prev_t:
+                raise SafetyValidationError(f"Gesture point {i} time must be finite and increasing.")
+            for name, v in zip(names, pt.positions, strict=True):
+                lo, hi = limits[name]
+                if not math.isfinite(v) or v < lo - 1e-3 or v > hi + 1e-3:
+                    raise SafetyValidationError(f"Gesture point {i}: {name}={v:.3f} rad outside [{lo:.2f}, {hi:.2f}].")
+            if prev_q is not None:
+                dt = pt.t - prev_t
+                peak = max(peak, max(abs(a - b) for a, b in zip(pt.positions, prev_q, strict=True)) / dt)
+            prev_t, prev_q = pt.t, pt.positions
+        if prev_t > GESTURE_MAX_DURATION_S:
+            raise SafetyValidationError(f"Gesture lasts {prev_t:.1f} s, over {GESTURE_MAX_DURATION_S:.0f} s.")
+        if peak > GESTURE_MAX_JOINT_VEL_RPS:
+            raise SafetyValidationError(
+                f"Gesture joint speed {peak:.2f} rad/s exceeds {GESTURE_MAX_JOINT_VEL_RPS:.2f} rad/s."
+            )
 
     def assert_robot_state_safe(
         self,

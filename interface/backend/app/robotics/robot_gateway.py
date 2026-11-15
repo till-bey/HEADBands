@@ -17,6 +17,7 @@ from app.infrastructure.pubsub import TelemetryPubSubPublisher
 from app.robotics.action_schema import (
     AllowedActionType,
     CameraFrameSnapshot,
+    GestureTrajectory,
     JointStatesSnapshot,
     RobotActionProposal,
     RobotOperationalState,
@@ -25,6 +26,7 @@ from app.robotics.action_schema import (
     ValidatedRobotCommand,
 )
 from app.robotics.action_validator import ActionSafetyValidator, SafetyValidationError
+from app.robotics.gesture_planner import GesturePlanner
 
 logger = get_logger(__name__)
 
@@ -37,10 +39,12 @@ class RobotSafetyGateway:
         settings: Settings,
         validator: ActionSafetyValidator,
         telemetry_publisher: TelemetryPubSubPublisher,
+        gesture_planner: GesturePlanner | None = None,
     ) -> None:
         self._settings = settings
         self._validator = validator
         self._pubsub = telemetry_publisher
+        self._gesture_planner = gesture_planner or GesturePlanner(settings)
         self._status = RobotStatus()
         self._pending_commands: dict[str, ValidatedRobotCommand] = {}
         self._dispatched_history: list[ValidatedRobotCommand] = []
@@ -206,10 +210,20 @@ class RobotSafetyGateway:
         proposal: RobotActionProposal | dict[str, Any],
     ) -> tuple[ValidatedRobotCommand, bool]:
         """Validate a proposal; either queue for human confirmation or dispatch if safe/non-motion."""
+        gesture = None
+        action = proposal.get("action") if isinstance(proposal, dict) else proposal.action
+        if action == AllowedActionType.GENERATED_GESTURE or action == AllowedActionType.GENERATED_GESTURE.value:
+            if isinstance(proposal, dict):
+                proposal.pop("gesture", None)  # a caller-supplied trajectory is never trusted
+                description = str(proposal.get("object_label") or proposal.get("rationale") or "").strip()
+            else:
+                description = (proposal.object_label or proposal.rationale or "").strip()
+            gesture = await self.plan_gesture(description)
         validated = self._validator.parse_and_validate_proposal(
             proposal,
             robot_status=self.get_status(),
             require_active_bridge_watchdog=False,
+            gesture=gesture,
         )
 
         if validated.requires_confirmation and not validated.confirmed_by_human:
@@ -223,6 +237,17 @@ class RobotSafetyGateway:
         dispatched = await self._dispatch_to_bridge(validated)
         return validated, dispatched
 
+    async def plan_gesture(self, description: str) -> GestureTrajectory:
+        """Plan a language-described gesture from the robot's current pose; raise if it is refused."""
+        if not description:
+            raise SafetyValidationError("Gesture needs a description, e.g. 'salute with the right hand'.")
+        snapshot, age = self.get_latest_joint_states()
+        current = snapshot.positions if snapshot is not None and age is not None and age < 5.0 else None
+        result = await self._gesture_planner.plan(description[:200], current)
+        if not result.ok or result.trajectory is None:
+            raise SafetyValidationError("Gesture refused by the planner: " + " ".join(result.reasons))
+        return result.trajectory
+
     async def confirm_and_dispatch(self, command_id: str) -> tuple[ValidatedRobotCommand, bool]:
         """Approve a pending human-confirmation command if unexpired and robot remains safe."""
         cmd = self._pending_commands.pop(command_id, None)
@@ -234,6 +259,8 @@ class RobotSafetyGateway:
             robot_status=self.get_status(),
             require_active_watchdog=False,
         )
+        if cmd.gesture is not None:
+            self._validator.assert_gesture_trajectory_safe(cmd.gesture)
 
         cmd.confirmed_by_human = True
         cmd.confirmed_at = datetime.now(tz=UTC)

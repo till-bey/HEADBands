@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.container import ServiceContainer, get_container
 from app.core.logging import get_logger
 from app.core.security import require_api_auth, verify_robot_bridge_ws_auth
-from app.robotics.action_schema import RobotTelemetryEvent
+from app.robotics.action_schema import AllowedActionType, RobotActionProposal, RobotTelemetryEvent
 from app.robotics.action_validator import SafetyValidationError
 
 logger = get_logger(__name__)
@@ -36,6 +36,39 @@ class EStopRequest(BaseModel):
 class CameraCaptureRequest(BaseModel):
     reason: str = Field(default="Operator on-demand camera capture", max_length=200)
     max_age_seconds: float = Field(default=0.0, ge=0.0, le=30.0)
+
+
+class GestureRequest(BaseModel):
+    description: str = Field(min_length=2, max_length=200)
+
+
+@router.post("/api/v1/robotics/gesture", dependencies=[Depends(require_api_auth)])
+async def plan_generated_gesture(
+    body: GestureRequest,
+    container: Annotated[ServiceContainer, Depends(get_container)],
+) -> dict[str, Any]:
+    """Plan a gesture from a description and queue it for human confirmation (never dispatched directly)."""
+    if not container.settings.robotics_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Robotics integration is disabled.")
+    description = body.description.strip()
+    try:
+        cmd, dispatched = await container.robot_gateway.submit_proposal(
+            RobotActionProposal(
+                action=AllowedActionType.GENERATED_GESTURE,
+                object_label=description[:120],
+                speed=0.2,
+                requires_confirmation=True,
+                rationale=f"Generated arm gesture: {description[:200]}",
+            )
+        )
+    except SafetyValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {
+        "planned": True,
+        "dispatched": dispatched,
+        "awaiting_confirmation": cmd.requires_confirmation and not cmd.confirmed_by_human,
+        "command": cmd.model_dump(mode="json"),
+    }
 
 
 @router.get("/api/v1/robotics/status", dependencies=[Depends(require_api_auth)])

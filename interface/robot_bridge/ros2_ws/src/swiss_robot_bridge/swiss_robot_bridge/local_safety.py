@@ -10,6 +10,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from swiss_robot_bridge.panther_topics import (
+    ARM_JOINT_LIMITS,
+    GESTURE_MAX_DURATION_S,
+    MAX_ARM_JOINT_VEL_RPS,
     GRIPPER_CLOSED_POS,
     GRIPPER_DEFAULT_VEL,
     GRIPPER_MODE_PARALLEL,
@@ -34,13 +37,14 @@ ALLOWED_LOCAL_ACTIONS = frozenset(
         "pick_object",
         "place_object",
         "throw_object",
+        "generated_gesture",
         "return_home",
         "stop",
     }
 )
 
 MOTION_ACTIONS_REQUIRING_HUMAN_CONFIRMATION = frozenset(
-    {"move_to", "rotate", "pick_object", "place_object", "throw_object", "return_home"}
+    {"move_to", "rotate", "pick_object", "place_object", "throw_object", "generated_gesture", "return_home"}
 )
 
 
@@ -57,6 +61,55 @@ class LocalSafetyRejectedError(ValueError):
     """Raised on the robot computer when any incoming command violates local safety bounds."""
 
 
+def check_gesture_locally(
+    gesture: LocalGestureTrajectory,
+) -> tuple[tuple[str, ...], list[tuple[float, tuple[float, ...], float | None]]]:
+    """Re-check a cloud-planned gesture against local limits; return (joints, points) for playback."""
+    names = tuple(gesture.joint_names)
+    if not names or len(set(names)) != len(names) or any(n not in ARM_JOINT_LIMITS for n in names):
+        raise LocalSafetyRejectedError(f"Gesture joints not allowed locally: {list(names)}")
+    if not gesture.points or len(gesture.points) > 600:
+        raise LocalSafetyRejectedError("Gesture must have 1 to 600 points.")
+    out: list[tuple[float, tuple[float, ...], float | None]] = []
+    prev_t, prev_q = 0.0, None
+    for i, pt in enumerate(gesture.points):
+        if len(pt.positions) != len(names) or not math.isfinite(pt.t) or pt.t <= prev_t:
+            raise LocalSafetyRejectedError(f"Gesture point {i} malformed or not increasing in time.")
+        q = tuple(float(v) for v in pt.positions)
+        for name, v in zip(names, q):
+            lo, hi = ARM_JOINT_LIMITS[name]
+            if not math.isfinite(v) or v < lo - 1e-3 or v > hi + 1e-3:
+                raise LocalSafetyRejectedError(f"Gesture point {i}: {name}={v:.3f} outside [{lo}, {hi}].")
+        if prev_q is not None:
+            speed = max(abs(a - b) for a, b in zip(q, prev_q)) / (pt.t - prev_t)
+            if speed > MAX_ARM_JOINT_VEL_RPS + 1e-6:
+                raise LocalSafetyRejectedError(
+                    f"Gesture joint speed {speed:.2f} rad/s exceeds {MAX_ARM_JOINT_VEL_RPS} rad/s locally."
+                )
+        out.append((round(pt.t, 4), q, None))
+        prev_t, prev_q = pt.t, q
+    if prev_t > GESTURE_MAX_DURATION_S:
+        raise LocalSafetyRejectedError(f"Gesture lasts {prev_t:.1f} s, over {GESTURE_MAX_DURATION_S:.0f} s.")
+    return names, out
+
+
+def retime_from_current_pose(
+    names: tuple[str, ...],
+    points: list[tuple[float, tuple[float, ...], float | None]],
+    current: dict[str, float],
+    max_vel: float = MAX_ARM_JOINT_VEL_RPS * 0.9,
+) -> list[tuple[float, tuple[float, ...], float | None]]:
+    """Delay the trajectory if the arm's actual pose is too far from the first point for max_vel."""
+    if not points or not all(n in current for n in names):
+        return points
+    gap = max(abs(points[0][1][i] - float(current[n])) for i, n in enumerate(names))
+    needed = gap / max_vel
+    shift = max(0.0, needed - points[0][0])
+    if shift <= 1e-3:
+        return points
+    return [(round(t + shift, 4), q, g) for t, q, g in points]
+
+
 class LocalTarget3D(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -65,10 +118,30 @@ class LocalTarget3D(BaseModel):
     z: float = 0.0
 
 
+class LocalGesturePoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    t: float
+    positions: list[float]
+
+
+class LocalGestureTrajectory(BaseModel):
+    """Planned arm trajectory from the cloud planner. Only joint_names and points are used here;
+    descriptive fields (name, keyframes, report) are ignored and everything is re-checked locally."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = ""
+    joint_names: list[str]
+    points: list[LocalGesturePoint]
+
+
 class IncomingCloudCommand(BaseModel):
     """Strict local schema — rejects unknown keys, raw ROS topics, or code payloads."""
 
     model_config = ConfigDict(extra="forbid")
+
+    gesture: LocalGestureTrajectory | None = None
 
     command_id: str
     action: str
@@ -118,6 +191,7 @@ class PantherActuationPlan:
         default_factory=list
     )
     switch_arm_trajectory_controllers: bool = False
+    trajectory_duration_seconds: float = 0.0  # arm trajectory length; holds queued steps until it ends
     trigger_camera: bool = False
     preempt_teleop: bool = False
     enable_ultrasonics: bool = False
@@ -198,6 +272,10 @@ class LocalSafetySupervisor:
             else:
                 self._motion_start_odom = None
                 self.motion_deadline_monotonic = monotonic_now + plan.twist_duration_seconds
+        elif monotonic_now is not None and plan.trajectory_duration_seconds > 0.0:
+            # Arm-only trajectory: no wheel motion, but the next queued step waits for it to finish.
+            self._motion_start_odom = None
+            self.motion_deadline_monotonic = monotonic_now + plan.trajectory_duration_seconds + 0.5
         else:
             self._motion_start_odom = None
             self.motion_deadline_monotonic = None
@@ -454,6 +532,13 @@ class LocalSafetySupervisor:
             plan.trigger_camera = True
             if cmd.target is not None and cmd.target.z > 0.01:
                 plan.lift_position_m = round(_clamp(cmd.target.z, LIFT_MIN_M, LIFT_MAX_M), 4)
+
+        elif cmd.action == "generated_gesture":
+            if cmd.gesture is None:
+                raise LocalSafetyRejectedError("generated_gesture arrived without a trajectory.")
+            plan.master_trajectory_joints, plan.master_trajectory_points = check_gesture_locally(cmd.gesture)
+            plan.trajectory_duration_seconds = plan.master_trajectory_points[-1][0]
+            plan.switch_arm_trajectory_controllers = True
 
         plan.twist = twist
         self._activate_plan(plan, monotonic_now)
