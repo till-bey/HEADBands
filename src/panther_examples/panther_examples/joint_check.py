@@ -31,6 +31,7 @@ from panther_examples.robot import (
 ARM_VEL = 0.2  # rad/s for the step, under cartesian_follow's 0.5 default
 TOL = {"arms": 0.02, "head": 0.02, "grippers": 0.05, "lift": 0.01}  # rad, rad, 0..1, m
 GRIPPER_STEP, LIFT_STEP = 0.3, 0.05
+SETTLE = 0.5  # s
 
 
 def step_target(q, lower, upper, delta):
@@ -120,7 +121,9 @@ class Check:
         near = lambda v: abs(self.pos.get(joint, float("nan")) - v) <= TOL[group]
         self.command(group, joint, target, start)
         ok = self.spin_until(lambda: near(target), timeout)
+        self.spin_until(lambda: False, SETTLE)  # report where it settles, not where it entered the tolerance
         reached = self.pos.get(joint)
+        ok = ok and near(target)
         self.command(group, joint, start[joint], start)
         back = self.spin_until(lambda: near(start[joint]), timeout)
         return reached, ok and back
