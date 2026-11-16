@@ -102,10 +102,10 @@ class FakeRobot:
         with self._lock:
             return self._head_state.copy()
 
-    def move_head(self, delta_rad):
+    def move_head(self, delta_rad, *, axis="pitch"):
         with self._lock:
             self._head_commands.append(delta_rad)
-            self._head_state['pitch'] += delta_rad
+            self._head_state[axis] += delta_rad
             self._head_state['moving'] = True
 
     def stop_head(self):
@@ -334,11 +334,16 @@ class WebControlTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 post('/robot/head/down', {})
             self.assertEqual(error.exception.code, 400)
-            for direction, sign in [('up', -1), ('down', 1)]:
+            for direction, sign in [('up', -1), ('down', 1), ('left', 1), ('right', -1)]:
                 count = len(self.robot.head_commands())
+                previous = self.robot.head_status
                 post('/robot/head/' + direction, {'generation': self.control.status()['generation']})
                 self.wait_for(lambda: len(self.robot.head_commands()) > count)
                 self.assertAlmostEqual(self.robot.head_commands()[-1], sign * math.radians(5))
+                axis = 'pitch' if direction in ('up', 'down') else 'yaw'
+                other = 'yaw' if axis == 'pitch' else 'pitch'
+                self.assertAlmostEqual(self.robot.head_status[axis], previous[axis] + sign * math.radians(5))
+                self.assertEqual(self.robot.head_status[other], previous[other])
                 post('/robot/stop', {})
                 self.wait_for(lambda: not self.control.status()['head_moving'])
             post('/robot/head/down', {'generation': self.control.status()['generation']})

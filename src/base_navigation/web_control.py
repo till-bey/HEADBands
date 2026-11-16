@@ -185,8 +185,8 @@ class WebRobotControl:
     def jog_head(self, direction, *, expected_generation=None):
         with self._lock:
             self._expire_lease()
-            if direction not in ("up", "down"):
-                raise ValueError("Head direction must be up or down")
+            if direction not in ("up", "down", "left", "right"):
+                raise ValueError("Head direction must be up, down, left or right")
             if expected_generation is not None and expected_generation != self._run_generation:
                 raise ValueError("Head request expired after Stop or a settings change. Click again.")
             if self._connection != "connected" or self._shutdown.is_set():
@@ -195,18 +195,20 @@ class WebRobotControl:
                 raise ValueError("A connected head controller and fresh pitch/yaw feedback are required")
             if self._adjusting():
                 raise ValueError("Wait for the current body/head movement to finish")
-            delta = math.radians(5) * (-1 if direction == "up" else 1)
-            if not -0.26 <= self._head["pitch"] + delta <= 1.41:
-                raise ValueError("Head pitch must stay between -0.26 and 1.41 rad")
+            axis = "pitch" if direction in ("up", "down") else "yaw"
+            delta = math.radians(5) * (-1 if direction in ("up", "right") else 1)
+            minimum, maximum = (-0.26, 1.41) if axis == "pitch" else (-1.2, 1.2)
+            if not minimum <= self._head[axis] + delta <= maximum:
+                raise ValueError(f"Head {axis} must stay between {minimum} and {maximum} rad")
             self._enabled = False
             self._position = None
             self._observed_at = 0.0
             self._target_generation += 1
             self._run_generation += 1
-            self._head_pending = delta
+            self._head_pending = (delta, axis)
             self._lease_deadline = self._clock() + 3.0
             self._message = f"Head {direction} requested; navigation stopped"
-        return "Head step requested (5 degrees); update camera tilt if the camera moves with the head"
+        return "Head step requested (5 degrees)"
 
     def _service_head(self, robot):
         with self._lock:
@@ -215,10 +217,10 @@ class WebRobotControl:
                 robot.stop_head()
                 self._head_stop_pending = False
             if self._head_pending is not None and not self._shutdown.is_set():
-                delta, self._head_pending = self._head_pending, None
+                (delta, axis), self._head_pending = self._head_pending, None
                 try:
                     robot.set_velocity(0.0, 0.0)
-                    robot.move_head(delta)
+                    robot.move_head(delta, axis=axis)
                 except (ValueError, RuntimeError) as exc:
                     self._message = f"Head movement rejected: {exc}"
             previous_moving = self._head["moving"]
