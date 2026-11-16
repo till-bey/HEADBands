@@ -37,8 +37,11 @@ def sample_values(**changes):
         "min_ellipse_ratio": 0.4,
         "min_area": 180,
         "min_white_fraction": 0.55,
+        "side_std_threshold": 30.0,
         "angular_kp": 0.9,
         "linear_kp": 0.3,
+        "angular_kd": 0.0,
+        "linear_kd": 0.0,
         "max_angular_speed": 0.35,
         "max_linear_speed": 0.12,
         "angle_tolerance": 0.04,
@@ -70,13 +73,14 @@ class SettingsFileTests(unittest.TestCase):
         args = parse_args([
             "--settings-file", str(self.path), "http://127.0.0.1:8081/stream",
             "--no-snapshot", "--rgb-sum-min", "190", "--linear-kp", "0.5",
-            "--target-distance", "0.3",
+            "--target-distance", "0.3", "--angular-kd", "0.12", "--linear-kd", "0.25",
         ], dashboard=True)
         self.assertEqual((args.url, args.snapshot, args.rgb_sum_min, args.linear_kp),
                          ("http://127.0.0.1:8081/stream", False, 190, 0.5))
         self.assertEqual((args.channel_difference_max, args.robot_z, args.port),
                          (55, 0.22, 8877))
         self.assertEqual(args.target_distance, 0.3)
+        self.assertEqual((args.angular_kd, args.linear_kd), (0.12, 0.25))
         self.assertEqual(json.loads(self.path.read_text()), values | {"port": 8877})
 
     def test_blank_camera_url_can_be_saved_but_cannot_start_navigation(self):
@@ -118,6 +122,9 @@ class SettingsFileTests(unittest.TestCase):
         save_settings(self.path, values)
         before = self.path.read_bytes()
         for changes in ({"rgb_sum_min": 766}, {"channel_difference_max": -1},
+                        {"angular_kd": -1}, {"linear_kd": float("inf")},
+                        {"side_std_threshold": -1}, {"side_std_threshold": 766},
+                        {"side_std_threshold": float("nan")},
                         {"linear_kp": float("nan")}, {"snapshot": "yes"},
                         {"horizontal_fov": 180}, {"url": "not-a-camera-url"},
                         {"min_radius": 100}, {"min_radius": 1.5}, {"max_radius": 0},
@@ -148,7 +155,7 @@ class SettingsFileTests(unittest.TestCase):
 
     def test_legacy_settings_keep_detector_defaults_without_rewriting_file(self):
         from detector import DetectorSettings
-        names = ('min_radius', 'max_radius', 'min_ellipse_ratio', 'min_area', 'min_white_fraction')
+        names = ('min_radius', 'max_radius', 'min_ellipse_ratio', 'min_area', 'min_white_fraction', 'side_std_threshold')
         legacy = {k: v for k, v in sample_values().items() if k not in (*names, 'camera_base_height')}
         legacy['port'] = 8765
         self.path.write_text(json.dumps(legacy))
@@ -158,6 +165,13 @@ class SettingsFileTests(unittest.TestCase):
         for name in names:
             self.assertEqual(getattr(loaded, name), getattr(DetectorSettings(), name))
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_legacy_settings_default_to_zero_derivative_gains(self):
+        legacy = sample_values() | {'port': 8765}
+        del legacy['angular_kd'], legacy['linear_kd']
+        self.path.write_text(json.dumps(legacy))
+        loaded = load_settings(self.path)
+        self.assertEqual((loaded.angular_kd, loaded.linear_kd), (0.0, 0.0))
 
     def test_retired_edge_settings_are_ignored_and_removed_on_save(self):
         values = sample_values()
@@ -214,6 +228,8 @@ class BrowserSettingsPersistenceTests(unittest.TestCase):
 
     def test_save_then_reload_restores_form_values_without_applying_camera(self):
         changed = sample_values(url="http://127.0.0.1:8082/other.jpg", robot_z=0.5,
+                                angular_kd=0.12, linear_kd=0.25,
+                                side_std_threshold=45.5,
                                 rgb_sum_min=190, channel_difference_max=65,
                                 tilt_rad=0.73, max_linear_speed=0.08, target_distance=0.3, min_radius=15, max_radius=120,
                                 min_ellipse_ratio=0.28, min_area=220, min_white_fraction=0.6)

@@ -21,6 +21,22 @@ from config import parse_args, SETTINGS_FIELDS
 
 
 class DashboardTests(unittest.TestCase):
+    def test_debug_panel_shows_controller_errors_and_clears_when_target_is_lost(self):
+        position = {'x': -0.1, 'y': 0.2, 'distance': math.hypot(-0.1, 0.2),
+                    'bearing_rad': math.atan2(-0.1, 0.2),
+                    'bearing_deg': math.degrees(math.atan2(-0.1, 0.2))}
+        command = self.controller.compute(position)
+        with patch.object(cv2, 'putText', wraps=cv2.putText) as put_text:
+            render_view(self.frame, (100, 100), position, command, 'Tracking')
+        labels = [call.args[1] for call in put_text.call_args_list]
+        self.assertIn('Position error: -0.076 m', labels)
+        self.assertIn('Angle error: -0.464 rad (-26.6 deg)', labels)
+        with patch.object(cv2, 'putText', wraps=cv2.putText) as put_text:
+            render_view(self.frame, None, None, self.controller.compute(None), 'No target')
+        labels = [call.args[1] for call in put_text.call_args_list]
+        self.assertIn('Position error: -- m', labels)
+        self.assertIn('Angle error: -- rad (-- deg)', labels)
+
     def setUp(self):
         self.args = SimpleNamespace(robot_z=0, tilt_rad=math.pi / 6,
                                     horizontal_fov=90, vertical_fov=None)
@@ -82,6 +98,7 @@ class DashboardTests(unittest.TestCase):
         self.assertAlmostEqual(position['bearing_rad'], math.atan2(position['x'], position['y']))
         self.assertGreater(position['bearing_rad'], 0)
         self.assertLess(command.angular_speed, 0)
+        self.assertEqual(command.angle_error, position['image_angle_rad'])
         self.assertEqual(status, "Tracking")
         rendered = render_view(self.frame, center, position, command, status)
         self.assertGreaterEqual(rendered.shape[0], self.frame.shape[0])

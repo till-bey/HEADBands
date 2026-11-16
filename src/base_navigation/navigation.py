@@ -12,15 +12,9 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
-from sensor_msgs.msg import JointState, Range
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
-
-if __package__:
-    from .ultrasound import UltrasoundReadings
-else:
-    from ultrasound import UltrasoundReadings
 
 LIFT_MIN_M = 0.0
 LIFT_MAX_M = 0.6  # Local interface reference recommends this over the conflicting SDK 0.8 m.
@@ -62,9 +56,6 @@ class BaseController(Node):
         self._head_deadline = None
         self._head_subscription = self.create_subscription(
             JointState, "/joint_states", self._on_head_state, 10)
-        self._ultrasound = UltrasoundReadings()
-        self._ultrasound_subscriptions = {}
-        self._ultrasound_discovery = self.create_timer(1.0, self._discover_ultrasound, clock=self._clock)
         self._timer = self.create_timer(0.05, self._tick, clock=self._clock)
 
     def move_base(self, linear_speed=0.0, angular_speed=0.0, duration=1.0):
@@ -112,18 +103,6 @@ class BaseController(Node):
         self._command = Twist()
         if rclpy.ok():
             self.publisher.publish(self._command)
-
-    def _discover_ultrasound(self):
-        # Range.radiation_type distinguishes ultrasound from infrared sensors.
-        for topic, types in self.get_topic_names_and_types():
-            if 'sensor_msgs/msg/Range' in types and topic not in self._ultrasound_subscriptions:
-                self._ultrasound_subscriptions[topic] = self.create_subscription(
-                    Range, topic, lambda message, name=topic: self._ultrasound.update(name, message),
-                    qos_profile_sensor_data)
-
-    @property
-    def ultrasound_status(self):
-        return self._ultrasound.snapshot()
 
     def _on_lift_state(self, message):
         """Accept the documented body_joint feedback, including explicit invalid states."""
@@ -279,10 +258,6 @@ class RobotNavigation:
         """Whether ROS is running and a drive subscriber is available."""
         return rclpy.ok() and self._node.publisher.get_subscription_count() > 0
 
-    @property
-    def ultrasound_status(self):
-        return self._node.ultrasound_status
-
     def set_velocity(self, linear_speed=0.0, angular_speed=0.0):
         """Apply m/s and rad/s. Return False if the drive is disconnected."""
         if self._node.publisher.get_subscription_count() == 0:
@@ -333,7 +308,6 @@ class RobotNavigation:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._node._timer.cancel()
-        self._node._ultrasound_discovery.cancel()
         try:
             self._node.stop()
             self._node.stop_lift()

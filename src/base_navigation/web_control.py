@@ -11,11 +11,9 @@ import math
 if __package__:
     from .controller import PController
     from .main import control_loop
-    from .avoidance import PotentialFieldController, sensor_distances, validate_mapping, STOP_M
 else:
     from controller import PController
     from main import control_loop
-    from avoidance import PotentialFieldController, sensor_distances, validate_mapping, STOP_M
 
 
 def _create_robot():
@@ -53,9 +51,6 @@ class WebRobotControl:
         self._head = {"connected": False, "fresh": False, "pitch": None, "yaw": None, "moving": False}
         self._head_pending = None
         self._head_stop_pending = False
-        self._ultrasound = []
-        self._avoidance_enabled = False
-        self._avoidance_mapping = {}
 
     def _adjusting(self):
         return (self._lift["moving"] or self._lift_pending is not None
@@ -111,10 +106,6 @@ class WebRobotControl:
                 raise ValueError("Connect ROS before running the controller")
             if not self._drive_connected:
                 raise ValueError("No drive subscriber connected to cmd_vel")
-            if self._avoidance_enabled:
-                distances, reason = sensor_distances(self._ultrasound, self._avoidance_mapping)
-                if distances is None:
-                    raise ValueError(reason)
             if self._adjusting():
                 raise ValueError("Wait for body/head movement to stop before running navigation")
             if (self._position is None
@@ -136,21 +127,6 @@ class WebRobotControl:
             self._head_stop_pending = True
             self._message = reason
         return "Stop requested"
-
-    def configure_avoidance(self, enabled, mapping, *, expected_generation=None):
-        if not isinstance(enabled, bool):
-            raise ValueError('Avoidance enabled must be true or false')
-        mapping = validate_mapping(mapping)
-        with self._lock:
-            if expected_generation is not None and expected_generation != self._run_generation:
-                raise ValueError('Avoidance request expired after Stop or a settings change. Click again.')
-            self._run_generation += 1
-            self._enabled = False
-            self._lift_pending = self._head_pending = None
-            self._lift_stop_pending = self._head_stop_pending = True
-            self._avoidance_enabled, self._avoidance_mapping = enabled, mapping
-            self._message = f'Obstacle avoidance {"enabled" if enabled else "disabled"}; controller stopped'
-        return self._message + '. Click Run controller to resume.'
 
     def disconnect(self):
         self.stop("Disconnecting ROS")
@@ -280,11 +256,6 @@ class WebRobotControl:
     def status(self):
         with self._lock:
             self._expire_lease()
-            distances, avoidance_status = sensor_distances(self._ultrasound, self._avoidance_mapping)
-            if not self._avoidance_enabled:
-                avoidance_status = 'Disabled'
-            elif distances is not None and min(distances.values()) <= STOP_M:
-                avoidance_status = 'Obstacle within 0.20 m; base stopped'
             return {
                 "connection": self._connection,
                 "generation": self._run_generation,
@@ -302,11 +273,6 @@ class WebRobotControl:
                 "head_pitch": self._head["pitch"],
                 "head_yaw": self._head["yaw"],
                 "head_moving": self._head["moving"] or self._head_pending is not None,
-                "ultrasound": [reading.copy() for reading in self._ultrasound],
-                "avoidance_enabled": self._avoidance_enabled,
-                "avoidance_ready": distances is not None,
-                "avoidance_status": avoidance_status,
-                "avoidance_mapping": {side: topics.copy() for side, topics in self._avoidance_mapping.items()},
             }
 
     def snapshot(self):
@@ -330,19 +296,6 @@ class WebRobotControl:
             if (not self._enabled or self._shutdown.is_set() or self._position is None
                     or self._clock() - self._observed_at > self._target_timeout):
                 linear_speed = angular_speed = 0.0
-            if self._avoidance_enabled:
-                # Recheck at publication time, after Stop/toggle may have arrived
-                # and after the field calculation took its snapshot.
-                self._ultrasound = robot.ultrasound_status
-                distances, reason = sensor_distances(self._ultrasound, self._avoidance_mapping)
-                if distances is None:
-                    if self._enabled:
-                        self._run_generation += 1
-                    self._enabled = False
-                    self._message = reason + '; navigation stopped. Click Run after feedback recovers.'
-                    linear_speed = angular_speed = 0.0
-                elif min(distances.values()) <= STOP_M:
-                    linear_speed = angular_speed = 0.0
             sent = robot.set_velocity(linear_speed, angular_speed)
             if not sent:
                 if self._enabled:
@@ -357,12 +310,7 @@ class WebRobotControl:
         self._service_head(robot)
         self._service_lift(robot)
         with self._lock:
-            self._ultrasound = robot.ultrasound_status
-            controller = self._controller
-            if self._avoidance_enabled:
-                controller = PotentialFieldController(controller, self._ultrasound,
-                                                       self._avoidance_mapping)
-            return controller, self._target_timeout
+            return self._controller, self._target_timeout
 
     def _report_status(self, message):
         with self._lock:
@@ -393,7 +341,6 @@ class WebRobotControl:
                 self._lift_pending = None
                 self._head = {"connected": False, "fresh": False, "pitch": None, "yaw": None, "moving": False}
                 self._head_pending = None
-                self._ultrasound = []
                 if self._connection != "error":
                     self._connection = "disconnected"
                     self._message = "ROS disconnected; stopped"

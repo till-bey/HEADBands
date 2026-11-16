@@ -102,7 +102,7 @@ def saved_upload_path(content: bytes, filename: str) -> Path:
     return path
 
 
-def show_candidate_details(candidates) -> None:
+def show_candidate_details(candidates, cfg) -> None:
     st.subheader("Candidate details")
     if not candidates:
         st.info("No candidate meets the current settings. Adjust white thresholds or ellipse size limits.")
@@ -117,7 +117,7 @@ def show_candidate_details(candidates) -> None:
         for i, candidate in enumerate(candidates, start=1)
     ], hide_index=True, use_container_width=True)
     st.caption("Mean and population standard deviation of per-pixel R+G+B use the inner 65% of both ellipse radii, excluding the outer rim. All pixels in this inner ellipse are included, including dark markings. R+G+B range: 0–765.")
-    st.caption("Side 0: standard deviation < 30. Side 1: standard deviation ≥ 30.")
+    st.caption(f"Side 0: standard deviation < {cfg.side_std_threshold:g}. Side 1: standard deviation ≥ {cfg.side_std_threshold:g}.")
 
 
 with st.sidebar:
@@ -169,6 +169,12 @@ with st.sidebar:
         help="Require max(R, G, B) − min(R, G, B) to stay below this value. This limits every pairwise channel difference; lower to reject tinted objects.",
     )
     min_white_fraction = st.number_input("Minimum white fill fraction", min_value=0.000001, max_value=1.0, value=saved_configuration.get("min_white_fraction", defaults.min_white_fraction), step=0.01, format="%.4f", key="det_min_white_fraction")
+    side_std_threshold = st.number_input(
+        "Side standard deviation threshold", min_value=0.0, max_value=765.0,
+        value=float(saved_configuration.get("side_std_threshold", defaults.side_std_threshold)),
+        step=1.0, key="det_side_std_threshold",
+        help="Side 0 below this R+G+B standard deviation; side 1 at or above it. Uses the inner 65% of both ellipse radii.",
+    )
     with st.expander("Ellipse size and shape tuning"):
         min_radius = st.number_input("Minimum approximate radius (px)", min_value=1, value=saved_configuration.get("min_radius", defaults.min_radius), step=1, key="det_min_radius")
         max_radius = st.number_input("Maximum approximate radius (px)", min_value=2, value=saved_configuration.get("max_radius", defaults.max_radius), step=1, key="det_max_radius")
@@ -188,6 +194,7 @@ cfg = DetectorSettings(
     min_ellipse_ratio=min_ellipse_ratio,
     min_area=min_area,
     min_white_fraction=min_white_fraction,
+    side_std_threshold=side_std_threshold,
 )
 
 st.title("🥏 Ground Frisbee Finder")
@@ -304,7 +311,7 @@ with detection_tab:
                     f"{latest.status} · newest frame age: {latest.age_seconds or 0:.2f}s. "
                     "Scores are heuristic shape matches, not calibrated classification probabilities."
                 )
-                show_candidate_details(candidates_now)
+                show_candidate_details(candidates_now, cfg)
                 if show_debug:
                     debug_cols = st.columns(2)
                     debug_cols[0].image(debug_now["threshold_mask"], caption="RGB threshold mask", use_container_width=True)
@@ -404,7 +411,7 @@ with detection_tab:
         st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
 
     st.caption(f"{frame_description} · detection frame {frame.shape[1]}×{frame.shape[0]}")
-    show_candidate_details(candidates)
+    show_candidate_details(candidates, cfg)
 
     with st.expander("Debug views: RGB threshold and cleaned mask", expanded=True):
         st.caption("Pixels pass when R + G + B reaches the minimum and channel difference stays within the maximum. Ellipse fitting uses only the cleaned white mask.")

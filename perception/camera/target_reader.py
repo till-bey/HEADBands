@@ -15,6 +15,7 @@ def create_camera(args):
             min_radius=args.min_radius, max_radius=args.max_radius,
             min_ellipse_ratio=args.min_ellipse_ratio, min_area=args.min_area,
             min_white_fraction=args.min_white_fraction,
+            side_std_threshold=args.side_std_threshold,
         ),
         mode=SNAPSHOT if args.snapshot else VIDEO_STREAM,
     )

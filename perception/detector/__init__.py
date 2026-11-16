@@ -25,6 +25,7 @@ class DetectorSettings:
     min_area: int = 150
     min_white_fraction: float = 0.48
     processing_width: int = 640  # landscape width; portrait swaps width/height
+    side_std_threshold: float = SIDE_STD_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,12 @@ class Candidate:
     score: float           # heuristic 0-1 shape/white match, NOT probability
     mean_rgb_sum: float = 0.0  # Measurement only: inner 65% of both ellipse radii.
     std_rgb_sum: float = 0.0  # Population standard deviation of per-pixel R+G+B.
+    side_std_threshold: float = SIDE_STD_THRESHOLD
 
     @property
     def side(self) -> int:
         """Classify the landing face from the inner-region RGB-sum variation."""
-        return int(self.std_rgb_sum >= SIDE_STD_THRESHOLD)
+        return int(self.std_rgb_sum >= self.side_std_threshold)
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
@@ -177,7 +179,8 @@ def find_ellipses(frame: np.ndarray, white_mask: np.ndarray, cfg: DetectorSettin
         rgb_sums = frame[y0:y1, x0:x1][inner_ellipse != 0].sum(axis=1, dtype=np.float64)
         mean_rgb_sum = float(rgb_sums.mean())
         std_rgb_sum = float(rgb_sums.std())
-        out.append(Candidate(center, axes, float(angle), "Ellipse", score, mean_rgb_sum, std_rgb_sum))
+        out.append(Candidate(center, axes, float(angle), "Ellipse", score, mean_rgb_sum,
+                             std_rgb_sum, cfg.side_std_threshold))
 
     return _suppress_overlapping_ellipses(out)
 

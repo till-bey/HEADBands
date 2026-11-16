@@ -57,8 +57,11 @@ before annotations, rather than using only white-threshold pixels.
 The live-frame cache retains the measurements alongside the detections.
 
 **Side** is reported in the candidate table and image annotations using the
-unrounded R+G+B population standard deviation: **0** below 30, **1** at or above
-30. This landing-face label does not change candidate acceptance or scoring.
+unrounded R+G+B population standard deviation: **0** below the threshold, **1**
+at or above it. Adjust **Side standard deviation threshold** in Detection
+settings (default: 30). Save it in the navigation dashboard and reload the saved
+configuration here to retain it across sessions. This landing-face label does
+not change candidate acceptance or scoring.
 
 RGB preprocessing uses OpenCV channel operations, and ellipse validation scans candidate patches instead of full-image masks. The live Detection dashboard reuses results for unchanged frames/settings. Its UI still refreshes up to about 7 times per second, independently of detector processing speed.
 

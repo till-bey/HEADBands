@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read the frisbee target, compute P control, and update robot velocities."""
+"""Read the frisbee target, compute PD control, and update robot velocities."""
 
 import time
 from pathlib import Path
@@ -10,22 +10,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "perception"))
 from camera import CameraTargetReader, create_camera
 
 if __package__:
+    from .controller import ControllerHistory
     from .config import parse_args, create_controller
     from .calibration import camera_pose
 else:
+    from controller import ControllerHistory
     from config import parse_args, create_controller
     from calibration import camera_pose
 
 
-def control_step(reader, controller, robot, *, target_timeout=0.5):
+def control_step(reader, controller, robot, *, target_timeout=0.5, history=None):
     """Read the latest target and apply one velocity update through the robot adapter."""
     position, observed_at, camera_status = reader.snapshot()
     if time.monotonic() - observed_at > target_timeout:
         position, camera_status = None, "Camera result expired"
 
-    command = controller.compute(position)
+    command = (history.compute(controller, position, observed_at, max_gap=target_timeout)
+               if history is not None else controller.compute(position))
     status = command.state if position is not None else camera_status
     if not robot.set_velocity(command.linear_speed, command.angular_speed):
+        if history is not None:
+            history.reset()
         status = "Waiting for cmd_vel subscriber"
     return status
 
@@ -39,10 +44,11 @@ def control_loop(reader, controller, robot, *, target_timeout=0.5,
     result, while ROS logging only reports changes.
     """
     last_status = None
+    history = ControllerHistory()
     while robot.running:
         if prepare_step is not None:
             controller, target_timeout = prepare_step()
-        status = control_step(reader, controller, robot, target_timeout=target_timeout)
+        status = control_step(reader, controller, robot, target_timeout=target_timeout, history=history)
         if on_status is not None:
             on_status(status)
         if status != last_status:
