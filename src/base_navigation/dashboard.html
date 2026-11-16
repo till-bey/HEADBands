@@ -151,11 +151,16 @@
       </div>
       <div class="robot-speeds" aria-label="Measured head angle">
         <span>Head pitch <strong id="head-pitch">—</strong>°</span>
+        <span>Yaw <strong id="head-yaw">—</strong>°</span>
       </div>
       <p id="head-detail" role="status">Connect ROS to adjust head angle.</p>
       <div class="pair">
         <button id="head-up" class="secondary" type="button" disabled>Look Up · 5°</button>
         <button id="head-down" class="secondary" type="button" disabled>Look Down · 5°</button>
+      </div>
+      <div class="pair">
+        <button id="head-left" class="secondary" type="button" disabled>Look Left · 5°</button>
+        <button id="head-right" class="secondary" type="button" disabled>Look Right · 5°</button>
       </div>
       <p id="robot-message" role="status" aria-live="polite"></p>
     </section>
@@ -296,6 +301,8 @@ const liftUp = document.getElementById('lift-up');
 const liftDown = document.getElementById('lift-down');
 const headUp = document.getElementById('head-up');
 const headDown = document.getElementById('head-down');
+const headLeft = document.getElementById('head-left');
+const headRight = document.getElementById('head-right');
 const robotMessage = document.getElementById('robot-message');
 let robotState = {connection: 'disconnected', running: false, drive_connected: false};
 let robotBusy = false;
@@ -306,7 +313,7 @@ function updateRobotButtons() {
   const liftReady = !robotBusy && robotState.connection === 'connected' && robotState.lift_connected && robotState.lift_fresh && !robotState.running && !robotState.lift_moving && !robotState.head_moving;
   liftUp.disabled = liftDown.disabled = !liftReady;
   const headReady = !robotBusy && robotState.connection === 'connected' && robotState.head_connected && robotState.head_fresh && !robotState.running && !robotState.lift_moving && !robotState.head_moving;
-  headUp.disabled = headDown.disabled = !headReady;
+  headUp.disabled = headDown.disabled = headLeft.disabled = headRight.disabled = !headReady;
   // Stop stays available during camera settings requests and ROS connection attempts.
 }
 function showRobotState(state) {
@@ -324,6 +331,7 @@ function showRobotState(state) {
     : !state.lift_fresh ? 'Waiting for fresh lift feedback.'
     : state.lift_moving ? 'Moving body to the requested height.' : 'Ready · 1 cm per click.';
   document.getElementById('head-pitch').textContent = Number.isFinite(state.head_pitch) ? (state.head_pitch * 180 / Math.PI).toFixed(1) : '—';
+  document.getElementById('head-yaw').textContent = Number.isFinite(state.head_yaw) ? (state.head_yaw * 180 / Math.PI).toFixed(1) : '—';
   document.getElementById('head-detail').textContent = state.connection !== 'connected' ? 'Connect ROS to adjust head angle.'
     : !state.head_connected ? 'Head controller is not connected.'
     : !state.head_fresh ? 'Waiting for fresh head pitch and yaw feedback.'
@@ -366,6 +374,8 @@ liftUp.addEventListener('click', () => robotAction('/robot/lift/up'));
 liftDown.addEventListener('click', () => robotAction('/robot/lift/down'));
 headUp.addEventListener('click', () => robotAction('/robot/head/up'));
 headDown.addEventListener('click', () => robotAction('/robot/head/down'));
+headLeft.addEventListener('click', () => robotAction('/robot/head/left'));
+headRight.addEventListener('click', () => robotAction('/robot/head/right'));
 document.getElementById('robot-stop').addEventListener('click', () => robotAction('/robot/stop', false));
 function stopWhenLeaving() {
   robotState.running = false;

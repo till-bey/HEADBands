@@ -85,6 +85,8 @@ class DashboardServer:
                     "/robot/lift/down": lambda **kw: view.robot_control.jog_lift("down", **kw),
                     "/robot/head/up": lambda **kw: view.robot_control.jog_head("up", **kw),
                     "/robot/head/down": lambda **kw: view.robot_control.jog_head("down", **kw),
+                    "/robot/head/left": lambda **kw: view.robot_control.jog_head("left", **kw),
+                    "/robot/head/right": lambda **kw: view.robot_control.jog_head("right", **kw),
                 }
                 if self.path in robot_actions:
                     # Only the local JSON UI may arm motion; reject cross-site forms.

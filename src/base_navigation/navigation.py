@@ -21,6 +21,8 @@ LIFT_MAX_M = 0.6  # Local interface reference recommends this over the conflicti
 LIFT_FEEDBACK_TIMEOUT_NS = int(1e9)
 HEAD_MIN_RAD = -0.26  # ~15 degrees up, inside the URDF's -0.348 limit.
 HEAD_MAX_RAD = 1.41  # ~81 degrees down, inside the URDF's 1.5 limit.
+HEAD_YAW_MIN_RAD = -1.2
+HEAD_YAW_MAX_RAD = 1.2
 HEAD_STEP_RAD = math.radians(5)
 HEAD_SPEED_RAD_S = 0.2
 # Actual robot behavior reported during dashboard testing: command slot 0 turns
@@ -182,7 +184,9 @@ class BaseController(Node):
                 "yaw": self._head_positions[HEAD_YAW_INDEX] if self._head_positions else None,
                 "moving": self._head_target is not None}
 
-    def move_head(self, delta_rad):
+    def move_head(self, delta_rad, *, axis="pitch"):
+        if axis not in ("pitch", "yaw"):
+            raise ValueError("Head axis must be pitch or yaw")
         if not math.isfinite(delta_rad) or not 0 < abs(delta_rad) <= HEAD_STEP_RAD + 1e-9:
             raise ValueError("Head step must be nonzero and at most 5 degrees")
         state = self.head_status
@@ -190,11 +194,14 @@ class BaseController(Node):
             raise RuntimeError("Connected head controller and fresh pitch/yaw feedback required")
         if state["moving"]:
             raise RuntimeError("Wait for the current head movement to finish")
-        target = state["pitch"] + delta_rad
-        if not HEAD_MIN_RAD <= target <= HEAD_MAX_RAD:
-            raise ValueError("Head pitch must stay between -0.26 and 1.41 rad")
+        minimum, maximum = ((HEAD_MIN_RAD, HEAD_MAX_RAD) if axis == "pitch"
+                            else (HEAD_YAW_MIN_RAD, HEAD_YAW_MAX_RAD))
+        target = state[axis] + delta_rad
+        if not minimum <= target <= maximum:
+            raise ValueError(f"Head {axis} must stay between {minimum} and {maximum} rad")
+        self._head_axis = axis
         self._head_target = target
-        self._head_command = self._head_positions.copy()  # Keep yaw unchanged.
+        self._head_command = self._head_positions.copy()  # Preserve the other axis.
         self._head_tick_at = self._clock.now().nanoseconds
         self._head_deadline = self._head_tick_at + int(2e9)
         return target
@@ -212,13 +219,14 @@ class BaseController(Node):
         if not state["connected"] or not state["fresh"] or now >= self._head_deadline:
             self.stop_head()
             return
-        if abs(state["pitch"] - self._head_target) <= 0.005:
+        if abs(state[self._head_axis] - self._head_target) <= 0.005:
             self._head_target = None
             return
         # Cap elapsed time so an executor delay cannot produce a large jump.
         step = HEAD_SPEED_RAD_S * min(0.05, max(0, (now - self._head_tick_at) / 1e9))
-        error = self._head_target - self._head_command[HEAD_PITCH_INDEX]
-        self._head_command[HEAD_PITCH_INDEX] += max(-step, min(step, error))
+        index = HEAD_PITCH_INDEX if self._head_axis == "pitch" else HEAD_YAW_INDEX
+        error = self._head_target - self._head_command[index]
+        self._head_command[index] += max(-step, min(step, error))
         self._head_tick_at = now
         self._publish_head(self._head_command)
 
@@ -288,8 +296,8 @@ class RobotNavigation:
     def head_status(self):
         return self._node.head_status
 
-    def move_head(self, delta_rad):
-        return self._node.move_head(delta_rad)
+    def move_head(self, delta_rad, *, axis="pitch"):
+        return self._node.move_head(delta_rad, axis=axis)
 
     def stop_head(self):
         self._node.stop_head()

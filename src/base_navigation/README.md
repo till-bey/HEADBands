@@ -239,9 +239,11 @@ Targets stay within 0–0.6 m, following the conservative range in the
 needs verification on the robot; automated checks use mocked controllers.
 
 **Look Up · 5°** and **Look Down · 5°** adjust head pitch while preserving measured
-yaw. They require a subscriber on `/head_forward_position_controller/commands`
+yaw. **Look Left · 5°** and **Look Right · 5°** adjust yaw while preserving pitch,
+within −1.2 to +1.2 rad. All four buttons require a subscriber on `/head_forward_position_controller/commands`
 and fresh `joint_head1` (pitch) and `joint_head0` (yaw) feedback on `/joint_states`.
-The page displays measured pitch in degrees, positive downward. Commands use
+The page displays measured pitch and yaw in degrees. Pitch is positive downward;
+yaw is positive left. Commands use
 `std_msgs/msg/Float64MultiArray` in `[yaw, pitch]` order, following the observed
 robot behavior rather than the reversed labels in the reference. Only the second
 command value changes during Up/Down steps. The target is streamed at 0.2 rad/s, within

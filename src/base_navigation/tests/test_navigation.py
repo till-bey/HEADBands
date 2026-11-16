@@ -95,6 +95,25 @@ class HeadControlTests(unittest.TestCase):
                 self.assertAlmostEqual(held[1], sign * 0.005)
                 self.assertFalse(self.node.head_status['moving'])
 
+    def test_smooth_left_and_right_preserve_pitch_and_respect_yaw_limits(self):
+        for sign in (-1, 1):
+            self.feedback(0.2, 0.0)
+            self.node.move_head(sign * math.radians(5), axis='yaw')
+            self.now += int(0.05e9)
+            self.node._tick_head()
+            sent = self.node.head_publisher.publish.call_args.args[0].data
+            self.assertAlmostEqual(sent[0], sign * 0.01)
+            self.assertAlmostEqual(sent[1], 0.2)
+            self.feedback(0.2, sign * 0.005)
+            self.node.stop_head()
+            held = self.node.head_publisher.publish.call_args.args[0].data
+            self.assertAlmostEqual(held[0], sign * 0.005)
+            self.assertAlmostEqual(held[1], 0.2)
+        for yaw, delta in ((1.19, 0.08), (-1.19, -0.08)):
+            self.feedback(0.2, yaw)
+            with self.assertRaises(ValueError):
+                self.node.move_head(delta, axis='yaw')
+
     def test_limits_missing_controller_and_stale_or_invalid_feedback(self):
         self.feedback(1.4, 0.3)
         with self.assertRaises(ValueError):
