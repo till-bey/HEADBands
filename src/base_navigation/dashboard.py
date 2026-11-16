@@ -2,6 +2,7 @@
 """Camera dashboard with browser controls for navigation and body height."""
 
 import time
+import math
 from pathlib import Path
 import sys
 
@@ -57,25 +58,27 @@ def render_view(frame, center, position, command, status, *, robot_status=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
 
     if position is None:
-        geometry = ["Distance: -- m", "Angle: -- rad (-- deg)",
+        geometry = ["Distance: -- m",
                     "Ground X (right): -- m", "Ground Y (forward): -- m"]
     else:
         geometry = [
             f"Distance: {position['distance']:.3f} m",
-            f"Angle: {position['bearing_rad']:+.3f} rad ({position['bearing_deg']:+.1f} deg)",
             f"Ground X (right): {position['x']:+.3f} m",
             f"Ground Y (forward): {position['y']:+.3f} m",
         ]
-    robot_label = (f"ROS: {robot_status['status']}" if isinstance(robot_status, dict)
-                   else "Preview only - no robot commands")
+    errors = [
+        (f"Position error: {command.distance_error:+.3f} m"
+         if command.distance_error is not None else "Position error: -- m"),
+        (f"Angle error: {command.angle_error:+.3f} rad ({math.degrees(command.angle_error):+.1f} deg)"
+         if command.angle_error is not None else "Angle error: -- rad (-- deg)"),
+    ]
     lines = [
-        "NAVIGATION DASHBOARD", robot_label, "", status, "",
+        "DEBUG", status, "",
         *geometry, "",
-        f"Controller: {command.state}",
-        f"Proposed forward: {command.linear_speed:.3f} m/s",
-        f"Proposed turn: {command.angular_speed:+.3f} rad/s", "",
-        "Angle: 0 forward, + right, - left.",
-        "ROS turn: + left.", "Ctrl+C in terminal to quit.",
+        *errors, "",
+        f"P preview: {command.state}",
+        f"Proposed linear: {command.linear_speed:+.3f} m/s",
+        f"Proposed turn: {command.angular_speed:+.3f} rad/s",
     ]
     panel_width, padding = 400, 24
     font, font_scale = cv2.FONT_HERSHEY_SIMPLEX, 0.58

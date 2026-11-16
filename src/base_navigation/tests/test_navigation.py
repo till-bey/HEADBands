@@ -15,21 +15,6 @@ except ImportError as exc:
 
 
 class NavigationTests(unittest.TestCase):
-    def test_discovers_standard_range_topics_once_without_publishing(self):
-        from ultrasound import UltrasoundReadings
-        node = navigation.BaseController.__new__(navigation.BaseController)
-        node._ultrasound = UltrasoundReadings()
-        node._ultrasound_subscriptions = {}
-        node.get_topic_names_and_types = Mock(return_value=[
-            ('/sonar/front', ['sensor_msgs/msg/Range']),
-            ('/joint_states', ['sensor_msgs/msg/JointState']),
-        ])
-        node.create_subscription = Mock()
-        node._discover_ultrasound()
-        node._discover_ultrasound()
-        node.create_subscription.assert_called_once()
-        self.assertEqual(node.create_subscription.call_args.args[1], '/sonar/front')
-
     def test_velocities_and_disconnected_stop(self):
         node = Mock()
         with patch.object(navigation, "BaseController", return_value=node), \

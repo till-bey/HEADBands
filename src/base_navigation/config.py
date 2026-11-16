@@ -21,7 +21,7 @@ ELLIPSE_DEFAULTS = {
 }
 
 
-def parse_args(argv=None, *, description="Track a frisbee with simultaneous steering and distance P control.", dashboard=False):
+def parse_args(argv=None, *, description="Track a frisbee with simultaneous steering and distance PD control.", dashboard=False):
     source_parser = argparse.ArgumentParser(add_help=False)
     source_parser.add_argument("--settings-file", type=Path, default=DEFAULT_SETTINGS_FILE)
     source_args, _ = source_parser.parse_known_args(argv)
@@ -47,10 +47,13 @@ def parse_args(argv=None, *, description="Track a frisbee with simultaneous stee
     parser.add_argument("--min-ellipse-ratio", type=float, help="Minimum minor/major axis ratio (0–1)")
     parser.add_argument("--min-area", type=int, help="Minimum contour area (processing pixels squared)")
     parser.add_argument("--min-white-fraction", type=float, help="Minimum white fill fraction (0–1)")
+    parser.add_argument("--side-std-threshold", type=float, help="R+G+B standard deviation boundary between side 0 and side 1 (default: %(default)s)")
     parser.add_argument("--angular-kp", type=float)
     parser.add_argument("--linear-kp", type=float)
+    parser.add_argument("--angular-kd", type=float, help="Steering derivative gain (default: %(default)s)")
+    parser.add_argument("--linear-kd", type=float, help="Distance derivative gain (default: %(default)s)")
     parser.add_argument("--max-angular-speed", type=float, help="rad/s")
-    parser.add_argument("--max-linear-speed", type=float, help="m/s")
+    parser.add_argument("--max-linear-speed", type=float, help="Forward/reverse speed limit (m/s)")
     parser.add_argument("--angle-tolerance", type=float, help="rad")
     parser.add_argument("--distance-tolerance", type=float, help="m")
     parser.add_argument("--target-distance", type=float, help="Tracking target distance (m; default: %(default)s)")
@@ -77,6 +80,8 @@ def parse_args(argv=None, *, description="Track a frisbee with simultaneous stee
 
 
 def validate_args(args):
+    if not math.isfinite(args.side_std_threshold) or not 0 <= args.side_std_threshold <= 765:
+        raise ValueError("Side standard deviation threshold must be between 0 and 765")
     if not math.isfinite(args.camera_base_height) or args.camera_base_height <= 0:
         raise ValueError("Camera base height must be finite and positive")
     if not 1 <= args.min_radius < args.max_radius:
@@ -105,7 +110,7 @@ def validate_args(args):
 
 def create_controller(args):
     return PController(**{name: getattr(args, name) for name in (
-        "angular_kp", "linear_kp", "max_angular_speed", "max_linear_speed",
+        "angular_kp", "linear_kp", "angular_kd", "linear_kd", "max_angular_speed", "max_linear_speed",
         "angle_tolerance", "distance_tolerance", "target_distance")})
 
 
@@ -114,9 +119,11 @@ SETTINGS_FIELDS = {
     "url": str, "snapshot": bool, "robot_z": float, "tilt_rad": float,
     "horizontal_fov": float, "vertical_fov": float, "resolution": int,
     "angular_kp": float, "linear_kp": float,
+    "angular_kd": float, "linear_kd": float,
     "rgb_sum_min": int, "channel_difference_max": int,
     "min_radius": int, "max_radius": int, "min_ellipse_ratio": float,
     "min_area": int, "min_white_fraction": float,
+    "side_std_threshold": float,
     "max_angular_speed": float, "max_linear_speed": float,
     "angle_tolerance": float, "distance_tolerance": float,
     "target_distance": float, "target_timeout": float,
@@ -167,6 +174,9 @@ def settings_from_values(values):
         # Older saved files include a detector selector; detection is now ellipse-only.
         values.pop("white_detector", None)
         values.setdefault("camera_base_height", 0.83)
+        values.setdefault("side_std_threshold", 30.0)
+        values.setdefault("angular_kd", 0.0)
+        values.setdefault("linear_kd", 0.0)
         # Retired edge-detector fields are ignored when reading older files.
         values.pop("canny_low", None)
         values.pop("canny_high", None)

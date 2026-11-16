@@ -35,9 +35,6 @@ class DashboardServer:
                 if path == "/":
                     content = Path(__file__).with_name("dashboard.html").read_bytes()
                     content_type = "text/html; charset=utf-8"
-                elif path == "/ultrasound_view.js":
-                    content = Path(__file__).with_name("ultrasound_view.js").read_bytes()
-                    content_type = "text/javascript; charset=utf-8"
                 elif path == "/settings":
                     with view._lock:
                         content = json.dumps(view._settings, allow_nan=False).encode()
@@ -84,7 +81,6 @@ class DashboardServer:
                     "/robot/stop": view.robot_control.stop,
                     "/robot/disconnect": view.robot_control.disconnect,
                     "/robot/heartbeat": view.robot_control.heartbeat,
-                    "/robot/avoidance": view.robot_control.configure_avoidance,
                     "/robot/lift/up": lambda **kw: view.robot_control.jog_lift("up", **kw),
                     "/robot/lift/down": lambda **kw: view.robot_control.jog_lift("down", **kw),
                     "/robot/head/up": lambda **kw: view.robot_control.jog_head("up", **kw),
@@ -99,11 +95,11 @@ class DashboardServer:
                     if self.headers.get_content_type() != "application/json":
                         self.reply_json(415, {"error": "Robot commands require application/json"})
                         return
-                    requires_generation = self.path in ("/robot/start", "/robot/avoidance") or self.path.startswith(("/robot/lift/", "/robot/head/"))
+                    requires_generation = self.path == "/robot/start" or self.path.startswith(("/robot/lift/", "/robot/head/"))
                     if requires_generation:
                         try:
                             length = int(self.headers.get("Content-Length", "0"))
-                            if not 0 < length <= (8192 if self.path == '/robot/avoidance' else 512):
+                            if not 0 < length <= 512:
                                 raise ValueError("Motion commands require a current generation token")
                             data = json.loads(self.rfile.read(length))
                             generation = data.get("generation") if isinstance(data, dict) else None
@@ -113,12 +109,8 @@ class DashboardServer:
                             self.reply_json(400, {"error": str(exc)})
                             return
                     try:
-                        if self.path == '/robot/avoidance':
-                            message = view.robot_control.configure_avoidance(
-                                data.get('enabled'), data.get('mapping'), expected_generation=generation)
-                        else:
-                            message = (robot_actions[self.path](expected_generation=generation)
-                                       if requires_generation else robot_actions[self.path]())
+                        message = (robot_actions[self.path](expected_generation=generation)
+                                   if requires_generation else robot_actions[self.path]())
                     except ValueError as exc:
                         self.reply_json(409, {"error": str(exc)})
                         return

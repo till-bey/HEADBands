@@ -16,6 +16,31 @@ import numpy as np
 
 
 class CalibrationTests(unittest.TestCase):
+    def test_horizontal_image_angle_stays_zero_on_center_line_as_pose_changes(self):
+        for tilt in (0.5, 1.0, math.pi / 2, 2.0):
+            for py in (180, 320, 460):
+                with self.subTest(tilt=tilt, py=py):
+                    position = pixel_to_ground_robot(240, py, 480, 640, 0, tilt, 90, 60)
+                    command = PController().compute(position)
+                    self.assertEqual(position['image_angle_rad'], 0)
+                    self.assertEqual(command.angle_error, 0)
+                    self.assertEqual(command.angular_speed, 0)
+
+    def test_fixed_crosshair_keeps_same_steering_error_across_projection_sign_change(self):
+        controller = PController(target_distance=0, angular_kd=0.2, angle_tolerance=0.001)
+        from controller import ControllerHistory
+        history = ControllerHistory()
+        errors, commands = [], []
+        for i, tilt in enumerate((1.0, 1.5, 1.6, 2.0, 1.5)):
+            position = pixel_to_ground_robot(250, 320, 480, 640, 0, tilt, 90, 60)
+            command = history.compute(controller, position, 1.0 + i * 0.1)
+            errors.append(command.angle_error)
+            commands.append(command.angular_speed)
+        for error in errors:
+            self.assertAlmostEqual(error, math.atan(10 / 240))
+        for command in commands:
+            self.assertAlmostEqual(command, commands[0])
+
     def setUp(self):
         self.settings = SimpleNamespace(camera_base_height=1.0, robot_z=0.1, tilt_rad=0.2,
                                         horizontal_fov=90, vertical_fov=60)

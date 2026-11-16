@@ -8,7 +8,8 @@ as "frisbee sides": that can mean which face the frisbee landed on.
 The authorized pipeline is RGB white thresholding, mask cleanup, and contour
 ellipse fitting. Measure the mean and population standard deviation of per-pixel
 R+G+B within 65% of both fitted ellipse radii. The user-approved landing-side
-rule is side 0 for standard deviation < 30, side 1 for standard deviation >= 30.
+rule is side 0 for standard deviation below the configurable side threshold,
+side 1 at or above it (default: 30).
 These measurements and labels do not affect candidate acceptance or scoring.
 Agree on any future landing-side classification rule with the user before
 implementing it.

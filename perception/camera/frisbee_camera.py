@@ -32,7 +32,8 @@ def pixel_to_ground(
     Tilt is downward from horizontal. Pixel origin is top-left, Y downward.
     Ground origin is below the camera: X right, Y forward. Distance units match
     camera_height; bearing is degrees, 0 forward and positive toward the right.
-    Omitting vertical FOV assumes square pixels.
+    Omitting vertical FOV assumes square pixels. image_angle_rad/deg measure
+    horizontal image offset from the optical axis, independent of ground tilt.
     """
     if image_width <= 0 or image_height <= 0 or camera_height <= 0:
         raise ValueError("Image dimensions and camera height must be positive.")
@@ -59,6 +60,8 @@ def pixel_to_ground(
     return {
         "distance": math.hypot(x, y),
         "bearing_deg": math.degrees(math.atan2(x, y)),
+        "image_angle_rad": math.atan(u),
+        "image_angle_deg": math.degrees(math.atan(u)),
         "x": x,
         "y": y,
     }

@@ -1,6 +1,7 @@
 """Check restored white-mask detection and diagnostic RGB measurements."""
 
 from pathlib import Path
+from dataclasses import replace
 import sys
 import unittest
 from unittest.mock import patch
@@ -81,3 +82,14 @@ class WhiteMaskDetectorTests(unittest.TestCase):
                 with patch.object(cv2, 'putText', wraps=cv2.putText) as put_text:
                     draw_detections(self.frame, [candidate], self.settings)
                 self.assertIn(f'Side {expected_side}', put_text.call_args.args[1])
+
+    def test_configured_threshold_changes_side_without_changing_detection(self):
+        cv2.ellipse(self.frame, (160, 120), (48, 25), 30, 0, 360, (240, 240, 240), -1)
+        cv2.ellipse(self.frame, (160, 120), (20, 10), 30, 0, 360, (20, 20, 20), -1)
+        low, _ = detect(self.frame, replace(self.settings, side_std_threshold=1.0))
+        high, _ = detect(self.frame, replace(self.settings, side_std_threshold=765.0))
+        self.assertEqual(len(low), 1)
+        self.assertEqual(len(high), 1)
+        self.assertEqual(low[0].side, 1)
+        self.assertEqual(high[0].side, 0)
+        self.assertEqual(replace(low[0], side_std_threshold=765.0), high[0])

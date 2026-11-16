@@ -72,6 +72,20 @@ class CameraWorkerTests(unittest.TestCase):
 
 
 class ControlLoopTests(unittest.TestCase):
+    def test_derivative_uses_observation_time_in_shared_loop(self):
+        reader, robot = Mock(), Mock()
+        reader.snapshot.side_effect = [({'x': 0, 'y': 0.7}, 1.0, 'Tracking'),
+                                       ({'x': 0, 'y': 0.6}, 1.1, 'Tracking'),
+                                       ({'x': 0, 'y': 0.6}, 1.1, 'Tracking')]
+        type(robot).running = property(Mock(side_effect=[True, True, True, False]))
+        robot.set_velocity.return_value = True
+        with patch('main.time.monotonic', return_value=1.2):
+            control_loop(reader, PController(linear_kd=0.2), robot)
+        speeds = [call.args[0] for call in robot.set_velocity.call_args_list]
+        self.assertAlmostEqual(speeds[0], 0.15)
+        self.assertAlmostEqual(speeds[1], 0.04)
+        self.assertEqual(speeds[1], speeds[2])
+
     def test_live_settings_and_status_updates_each_iteration(self):
         reader, robot = Mock(), Mock()
         reader.snapshot.return_value = ({"x": 0, "y": 0.2}, 99.9, "Tracking")
@@ -116,6 +130,11 @@ class ControlLoopTests(unittest.TestCase):
     def test_stale_or_missing_target_stops(self):
         for position, timestamp in (({"x": 0, "y": 2}, 99), (None, 100)):
             self.run_loop(position, timestamp).set_velocity.assert_called_once_with(0, 0)
+
+    def test_too_close_target_commands_reverse_and_expires_to_zero(self):
+        robot = self.run_loop({'x': 0, 'y': 0.1})
+        self.assertAlmostEqual(robot.set_velocity.call_args.args[0], -0.08)
+        self.run_loop({'x': 0, 'y': 0.1}, timestamp=99).set_velocity.assert_called_once_with(0, 0)
 
     def test_disconnected_drive_reports_waiting(self):
         robot = self.run_loop({"x": 0, "y": 2}, connected=False)

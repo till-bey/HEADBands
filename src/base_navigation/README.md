@@ -1,10 +1,10 @@
 # Frisbee navigation
 
 Both the CLI and dashboard run `main.py`'s `control_loop()`: read the latest target, reject expired results,
-compute P control, and call `robot.set_velocity()`. Responsibilities are split
+compute PD control, and call `robot.set_velocity()`. Responsibilities are split
 between:
 
-- `controller.py`: ROS-independent P control.
+- `controller.py`: ROS-independent PD control and observation history.
 - `perception/camera/`: shared stream reader, `FrisbeeCamera` API, navigation camera
   setup and worker, and webcam tool (also used by the website).
 - `config.py`: shared command-line options and controller configuration.
@@ -50,22 +50,47 @@ Replace the example URL and camera calibration with your actual values. Use
 tolerances, processing resolution, and detection thresholds. Running `main.py` starts
 navigation as soon as a camera target and a `cmd_vel` subscriber are available.
 
-The target coordinates are meters, X right and Y forward. Angular error is
-`atan2(x, y)`. Steering and distance control run simultaneously. Angular velocity
-is `-angular_kp * bearing`, limited to 0.4 rad/s, and zero inside
-`--angle-tolerance` (default 0.05 rad). Forward velocity is
-`min(max_linear_speed, linear_kp * (distance - target_distance)) * cos(bearing)`
-when outside the distance tolerance and the target is ahead. This slows approach
-as the target moves off-center, while continuing to steer toward it. Targets to
-the side or rear cause turning in place. At the tracking distance, forward
-motion stops while steering can still center the target; once both errors are
-within tolerance, both velocities are zero.
+The target coordinates are meters, X right and Y forward. Camera steering error
+is `atan((pixel_x - image_width/2) / fx)`, where
+`fx = image_width / (2*tan(horizontal_fov/2))`. It is zero on the vertical image
+center line, positive right, negative left, and independent of camera tilt and
+ground distance. Steering and distance control run simultaneously. Angular velocity
+is `-(angular_kp * bearing + angular_kd * bearing_rate)`, limited to 0.4 rad/s, and zero inside
+`--angle-tolerance` (default 0.05 rad). Distance control uses the signed error
+`distance - target_distance` and stops translation only when its absolute value
+is within `distance_tolerance`. Outside that band, radial speed is
+`linear_kp * error + linear_kd * distance_rate`, limited to the configured speed
+and clamped toward the distance goal. Multiplying by the cosine of the geometric
+bearing slows translation as the target moves off-center. A too-close target
+ahead commands reverse; a too-close target behind commands forward to increase
+separation. Damping can reduce either command to zero. Translation toward far
+rear targets is paused. At the tracking distance, translation stops while steering can
+still center the target; once both errors are within tolerance, both velocities
+are zero. The linear speed limit applies equally in forward and reverse.
+
+When distance is below `target_distance - distance_tolerance`, steering is paused
+(zero angular velocity) while the robot corrects separation along its current
+heading. A target ahead is corrected by backing up straight. Steering resumes
+once the distance enters the tolerance band; the angular D history is cleared
+during correction so resuming does not create a derivative kick. The debug angle
+error remains visible while steering is paused.
+
+The Controller tab exposes **Angular D gain** and **Linear D gain**, also available
+as `--angular-kd` and `--linear-kd`. Both default to zero, including for older
+settings files. Set nonzero gains and use **Save & apply settings** to enable
+damping. Linear D reduces approach speed as distance falls; Angular D damps
+turning as the bearing approaches center. Rates use observation timestamps and
+a 0.15 s low-pass filter. Repeated frames hold the previous rates. Missing,
+invalid or expired targets, long gaps, and gain changes reset derivative history;
+the first observation starts with zero derivative. Existing speed limits,
+tolerances, and target-loss stopping still apply.
 
 The default goal is 0.3 m from the camera's ground origin, with a 0.05 m tolerance.
 Set **Tracking target distance (m)** in the Controller tab and click **Save & apply settings** to persist and use the new value. The CLI also
 accepts `--target-distance`, for example `--target-distance 0.5` to stop 0.5 m away.
-Reaching the goal commands zero speed (including when already closer than the goal);
-the loop keeps watching and can follow a subsequently moved target.
+With the default settings, the accepted distance band is 0.25–0.35 m. Below it,
+the robot increases separation; above it, the robot approaches. The loop keeps
+watching and can follow a subsequently moved target.
 
 Projection assumes flat ground and a fixed, forward-facing camera with zero yaw
 and roll. Camera height is `--camera-base-height` (default 0.83 m) plus the
@@ -86,15 +111,25 @@ command zero velocity. Results expire after 0.5 s by default, measured from the
 start of acquisition; the existing camera API separately rejects frames older
 than one second. Camera waits and detection run in a worker so the ROS executor
 continues publishing and enforcing each movement's 0.15 s deadline. Ctrl+C stops
-the base and closes the camera. CLI approach control has no obstacle avoidance;
-the dashboard offers the optional ultrasound potential field described below.
+the base and closes the camera. Navigation uses camera-based tracking without
+obstacle avoidance.
 
 ## Navigation dashboard
 
 `dashboard.py` serves a local browser view with the camera image, a crosshair on the
 selected frisbee, ground distance in meters, bearing in radians and degrees,
-and the P controller's proposed state and velocities. The camera is interpreted
-and displayed in portrait, with telemetry on its right. The dashboard rotates
+and a proportional preview of state and velocities. The live robot speed display
+includes derivative damping when D gains are enabled.
+The image debug panel also shows signed **Position error** (`distance - target_distance`)
+in meters and **Angle error** (horizontal image angle) in radians and degrees, taken directly
+from the controller calculation before tolerances and speed limits. Positive
+angle means right; negative means left. Unavailable errors display dashes.
+The same image angle drives steering, derivative damping, and the debug display.
+Ground bearing is not displayed and does not drive camera steering. For
+callers supplying only ground X/Y, the controller retains the ground-bearing
+fallback, wrapped modulo 180° below target distance with derivative history reset
+when crossing that distance boundary.
+The camera is interpreted and displayed in portrait, with telemetry on its right. The dashboard rotates
 the camera image 180° to correct its upside-down mounting before detection,
 projection, and display.
 It uses the same detector, projection, calibration arguments, and controller as
@@ -120,7 +155,10 @@ also set these with `--rgb-sum-min` and `--channel-difference-max` in navigation
 or dashboard mode. Result timeout is in Camera, processing options are in Detector,
 and P-control tuning is in Controller.
 The Detector tab also has ellipse radius limits, minimum axis ratio, contour area,
-and white fill fraction. Radius and area refer to the processing resolution.
+white fill fraction, and a side standard deviation threshold (default: 30).
+Side 0 is below the threshold; side 1 is at or above it, using the inner 65%
+of both ellipse radii. The detection website displays these side labels.
+Radius and area refer to the processing resolution.
 Both websites use white-mask contour ellipses for detection. Retired edge-detector
 fields in older settings files are ignored and removed on the next explicit Save.
 Use Save & apply settings to update detection; Save and Reload include these
@@ -228,59 +266,6 @@ settings tab. They show the commanded forward and turn velocities. Run uses the
 currently applied settings, so apply form edits before starting. Missing or stale
 camera targets command zero velocity. Changing/disconnecting the camera stops
 navigation; click Run again after applying the new camera settings.
-
-### Ultrasound proximity display
-
-After **Connect ROS**, `navigation.py` discovers `sensor_msgs/msg/Range` topics
-and subscribes using sensor-data QoS. Only messages marked `ULTRASOUND` are shown;
-infrared readings are excluded. No enable service or motion command is sent.
-The actual robot's distance topic/type is not recorded in the local interface
-reference, so this standard-message integration still needs live verification.
-If the robot publishes an array or vendor message instead, its topic, units, and
-sensor order are needed to add the corresponding adapter.
-
-The four diamond segments show front/right/rear/left proximity: red at ≤0.30 m,
-amber at ≤0.60 m, and green beyond 0.60 m. A fresh close reading on **any** sensor
-shows **!** in the center, including sensors not yet assigned to a side. Missing,
-invalid, or older-than-one-second readings are gray and are never shown as clear.
-When multiple sensors cover one side, its nearest reading is shown. A side with
-incomplete coverage stays gray unless a known close reading makes it red/amber.
-
-Unambiguous direction names in topics/frames are placed automatically. Use
-**Sensor positions** to assign numbered/corner sensors to their physical sides;
-select multiple entries for a side if needed. Placements are remembered in this
-browser. Standard Range ±infinity readings display an upper/lower distance bound,
-without sending non-finite numbers to JSON. With obstacle avoidance disabled,
-this display is read-only and does not alter the controller's commands.
-
-### Optional potential-field obstacle avoidance
-
-Click **Enable obstacle avoidance** under Ultrasound proximity, check the sensor
-positions, then click **Run controller**. Enabling/disabling avoidance or changing
-its sensor map stops navigation and requires another Run click. Avoidance starts
-disabled when the server starts. It uses the shared `main.control_loop()` and
-keeps all ROS operations in `navigation.py`.
-
-`avoidance.py` combines the tracking attraction with repulsion along the four
-sensor directions. Within 0.60 m, repulsive strength is
-`0.008 * (1/d - 1/0.60) / d²`, using the nearest reading on each side. The resulting
-field steers away from obstacles and reduces forward speed while respecting the
-existing speed limits and never requesting reverse motion. Any reading at or
-inside 0.20 m (or a Range `too_close` report) holds both base velocities at zero.
-Repulsion never starts movement without a fresh camera target or moves the robot
-away from an already-reached target position.
-
-All four sides need fresh, valid coverage; every detected ultrasound sensor must
-be assigned. The enable action sends the display's sensor map to the server, so
-both use the same assignments. Incomplete, invalid, stale or unmapped coverage
-stops and disarms navigation. Restored feedback does not restart it automatically;
-click Run again. A finite `beyond_range` lower bound must cover at least 0.60 m.
-Coverage and close-obstacle checks run again immediately before commands are sent.
-
-This is a reactive field, not a path planner: a centered obstacle can cancel the
-attraction and cause a stopped local minimum. Physical collision clearance and
-the actual ultrasound topic/type still need verification on the robot. It does
-not replace the robot's own safety system or obstacle-aware path planning.
 
 The browser sends a heartbeat while navigation, body, or head movement is running. Hiding/leaving the
 page requests a stop, and a missing heartbeat stops navigation after three
