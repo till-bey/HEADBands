@@ -2,7 +2,7 @@
 
 The navigation dashboard server runs here on loopback, unchanged; the cloud forwards the page's requests to it
 over the bridge WebSocket (`navigation_http`). Base velocity goes through the bridge's safety supervisor
-(the 20 Hz loop publishes /cmd_vel); lift, head and ultrasound use navigation's own ROS node and head convention.
+(the 20 Hz loop publishes /cmd_vel); lift and head use navigation's own ROS node and head convention.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ ALLOWED_REQUESTS = frozenset(
         for p in (
             "/settings", "/settings/save", "/settings/reload", "/disconnect",
             "/robot/connect", "/robot/start", "/robot/stop", "/robot/disconnect", "/robot/heartbeat",
-            "/robot/avoidance", "/robot/lift/up", "/robot/lift/down", "/robot/head/up", "/robot/head/down",
+            "/robot/lift/up", "/robot/lift/down", "/robot/head/up", "/robot/head/down",
         )
     ]
 )
@@ -64,7 +64,6 @@ def _bridge_robot_factory(holder: "NavigationMode"):
                 holder.set_twist(0.0, 0.0)
                 holder.robot = None
                 self._node._timer.cancel()
-                self._node._ultrasound_discovery.cancel()
                 try:
                     self._node.stop_lift()
                     self._node.stop_head()
@@ -108,7 +107,7 @@ class NavigationMode:
         with self._lock:
             linear, angular, at = self._twist
         fresh = now - at <= TWIST_MAX_AGE_S
-        linear = min(max(linear, 0.0), max_linear) if fresh else 0.0  # navigation never reverses
+        linear = min(max(linear, -max_linear), max_linear) if fresh else 0.0  # navigation may back off
         angular = min(max(angular, -max_angular), max_angular) if fresh else 0.0
         if linear or angular:
             self._driving = True

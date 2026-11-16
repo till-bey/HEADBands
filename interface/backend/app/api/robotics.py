@@ -302,7 +302,7 @@ NAVIGATION_PATHS = {
     "GET": {"settings", "settings/saved", "robot/status", "frame.jpg"},
     "POST": {
         "settings", "settings/save", "settings/reload", "disconnect",
-        "robot/connect", "robot/start", "robot/stop", "robot/disconnect", "robot/heartbeat", "robot/avoidance",
+        "robot/connect", "robot/start", "robot/stop", "robot/disconnect", "robot/heartbeat",
         "robot/lift/up", "robot/lift/down", "robot/head/up", "robot/head/down",
     },
 }

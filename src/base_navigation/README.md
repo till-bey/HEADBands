@@ -211,7 +211,7 @@ shows it through the cloud: `interface/frontend/navigation.html` is a copy of `d
 go to `/api/v1/robotics/navigation/...` and are forwarded to the bridge
 (`interface/robot_bridge/.../navigation_mode.py`). Keep the two pages in sync.
 There, base velocity goes through the bridge's safety supervisor like a manual jog (speed limits, E-Stop,
-cloud watchdog and front LiDAR stop apply); lift, head and ultrasound use `navigation.py` as below,
+cloud watchdog and front LiDAR stop apply); lift and head use `navigation.py` as below,
 with its head convention. The standalone dashboard keeps working; do not run both against the same robot.
 
 ## Run ROS navigation from the browser

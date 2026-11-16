@@ -35,18 +35,6 @@
     .preview { align-self: start; padding: 10px; }
     .camera-monitor { width: 100%; }
     #view { background: #10151c; border-radius: 8px; }
-    .ultrasound-panel { border-top: 1px solid #304053; padding: 16px; }
-    .ultrasound-panel h2 { font-size: 18px; margin: 0; }
-    #ultrasound-diamond { display: block; width: 100%; max-width: 360px; margin: 8px auto; }
-    #ultrasound-diamond polygon { stroke: #19222e; stroke-width: 4; transition: fill .2s; }
-    #ultrasound-diamond text { fill: #c0cede; text-anchor: middle; font: 13px system-ui; }
-    #ultrasound-diamond [data-level="unknown"] { fill: #536377; }
-    #ultrasound-diamond [data-level="clear"] { fill: #87dfbd; }
-    #ultrasound-diamond [data-level="warning"] { fill: #f4c76a; }
-    #ultrasound-diamond [data-level="danger"] { fill: #f28e88; }
-    #ultrasound-diamond #ultrasound-alert { font-size: 40px; font-weight: 800; }
-    .ultrasound-panel summary { cursor: pointer; color: #c0cede; }
-    .ultrasound-panel select { font-size: 12px; padding: 4px; }
     .controller-actions { margin: 12px 0 18px; }
     .controller-actions button { margin-top: 0; }
     .robot-controls { padding: 14px 14px 20px; margin-bottom: 10px; border-bottom: 1px solid #304053; }
@@ -69,7 +57,7 @@
 </head>
 <body>
 <header>
-  <div><h1>Frisbee navigation</h1><p>Live camera and frisbee navigation on the robot. Use the controls below to run navigation or adjust body height.</p></div>
+  <div><h1>Frisbee navigation</h1><p>Live camera and frisbee navigation. Use the controls below to run navigation or adjust body height.</p></div>
   <nav aria-label="Pages"><a href="/#full">Back to the assistant</a><button id="authBtn" type="button">Password</button></nav>
 </header>
 <dialog id="authDialog" aria-labelledby="authTitle">
@@ -115,7 +103,7 @@
         <p id="camera-tilt-sum" class="caption"></p>
         <p id="camera-pose-source" class="caption"></p>
       </div>
-      <label for="max_linear_speed">Max forward speed (m/s)</label><input id="max_linear_speed" name="max_linear_speed" type="number" min="0.000001" step="any" required>
+      <label for="max_linear_speed">Max linear speed, forward/reverse (m/s)</label><input id="max_linear_speed" name="max_linear_speed" type="number" min="0.000001" step="any" required>
       <label for="max_angular_speed">Max turn speed (rad/s)</label><input id="max_angular_speed" name="max_angular_speed" type="number" min="0.000001" step="any" required>
     </section>
     <section id="panel-detector" class="tab-panel" role="tabpanel" aria-labelledby="tab-detector" hidden>
@@ -133,10 +121,13 @@
       <label for="min_ellipse_ratio">Minimum axis ratio</label><input id="min_ellipse_ratio" name="min_ellipse_ratio" type="number" min="0.01" max="1" step="0.01" required>
       <label for="min_area">Minimum contour area (px²)</label><input id="min_area" name="min_area" type="number" min="1" step="1" required>
       <label for="min_white_fraction">Minimum white fill fraction</label><input id="min_white_fraction" name="min_white_fraction" type="number" min="0.01" max="1" step="0.01" required>
+      <label for="side_std_threshold">Side standard deviation threshold</label><input id="side_std_threshold" name="side_std_threshold" type="number" min="0" max="765" step="any" required>
+      <p class="caption">Side 0 below this R+G+B standard deviation; side 1 at or above it. Default: 30.</p>
       <p class="caption">Radius and area use processing pixels. Lower axis ratios allow more tilted discs; higher white fill requires more white inside the ellipse. Maximum radius must exceed minimum radius.</p>
     </section>
     <section id="panel-controller" class="tab-panel" role="tabpanel" aria-labelledby="tab-controller" hidden>
       <div id="controller-fields"></div>
+      <p class="caption">D gains add damping from changes in camera distance and bearing. Zero disables damping. Save &amp; apply settings to use new gains.</p>
     </section>
     <div class="settings-actions">
       <button id="connect" type="submit" disabled>Save &amp; apply settings</button>
@@ -161,7 +152,7 @@
       <div class="robot-heading"><h2>ROS navigation</h2><span id="robot-connection" class="robot-badge" data-state="disconnected">Disconnected</span></div>
       <p id="robot-detail" role="status">Connect ROS to enable robot commands. Camera preview works without ROS.</p>
       <div class="robot-speeds" aria-label="Commanded robot velocities">
-        <span>Forward <strong id="robot-linear">0.000</strong> m/s</span>
+        <span>Linear (+ forward / − reverse) <strong id="robot-linear">0.000</strong> m/s</span>
         <span>Turn <strong id="robot-angular">0.000</strong> rad/s</span>
       </div>
       <div class="pair">
@@ -184,44 +175,11 @@
         <button id="head-up" class="secondary" type="button" disabled>Look Up · 5°</button>
         <button id="head-down" class="secondary" type="button" disabled>Look Down · 5°</button>
       </div>
-      <p class="caption">Head movement pauses navigation and preserves yaw. The measured head tilt is added to the camera tilt offset automatically.</p>
       <p id="robot-message" role="status" aria-live="polite"></p>
-      <p class="caption">Run uses the applied camera and controller settings. Body buttons require fresh lift feedback and pause navigation. Stop robot stops the base, body lift and head.</p>
     </section>
-    <section class="ultrasound-panel" aria-label="Ultrasound proximity">
-      <h2>Ultrasound proximity</h2>
-      <button id="avoidance-toggle" class="secondary" type="button" aria-pressed="false">Enable obstacle avoidance</button>
-      <p id="avoidance-status" role="status">Disabled. Enabling avoidance pauses the controller.</p>
-      <svg id="ultrasound-diamond" viewBox="0 0 320 280" role="img" aria-label="Ultrasound readings unavailable">
-        <polygon id="ultrasound-front" data-level="unknown" points="160,50 205,95 180,120 160,100 140,120 115,95"/>
-        <polygon id="ultrasound-right" data-level="unknown" points="205,95 250,140 205,185 180,160 200,140 180,120"/>
-        <polygon id="ultrasound-rear" data-level="unknown" points="205,185 160,230 115,185 140,160 160,180 180,160"/>
-        <polygon id="ultrasound-left" data-level="unknown" points="115,185 70,140 115,95 140,120 120,140 140,160"/>
-        <text x="160" y="22">Front</text><text id="ultrasound-front-value" x="160" y="40">—</text>
-        <text x="284" y="134">Right</text><text id="ultrasound-right-value" x="284" y="154">—</text>
-        <text x="160" y="254">Rear</text><text id="ultrasound-rear-value" x="160" y="274">—</text>
-        <text x="36" y="134">Left</text><text id="ultrasound-left-value" x="36" y="154">—</text>
-        <text id="ultrasound-alert" data-level="unknown" x="160" y="154">?</text>
-      </svg>
-      <p id="ultrasound-detail" role="status">Connect ROS to read ultrasound sensors.</p>
-      <p class="caption">Red ≤ 0.30 m · Amber ≤ 0.60 m · Green &gt; 0.60 m · Gray = unavailable. When enabled, avoidance repels within 0.60 m and stops at 0.20 m. Missing or stale coverage stops navigation.</p>
-      <details>
-        <summary>Sensor positions</summary>
-        <p class="caption">Assign sensors to their physical sides. Multiple sensors per side are supported. Avoidance requires fresh readings on all four sides and uses these same assignments. Changing assignments while enabled pauses the controller.</p>
-        <div class="pair">
-          <div><label for="ultrasound-map-front">Front sensors</label><select id="ultrasound-map-front" multiple size="3"></select></div>
-          <div><label for="ultrasound-map-right">Right sensors</label><select id="ultrasound-map-right" multiple size="3"></select></div>
-          <div><label for="ultrasound-map-rear">Rear sensors</label><select id="ultrasound-map-rear" multiple size="3"></select></div>
-          <div><label for="ultrasound-map-left">Left sensors</label><select id="ultrasound-map-left" multiple size="3"></select></div>
-        </div>
-        <button id="ultrasound-auto" class="secondary" type="button">Reset to automatic placement</button>
-      </details>
-    </section>
-    <p class="caption">Angle: zero forward, positive right. Height and tilt include applied mounting offsets and fresh ROS feedback. Navigation runs in the robot bridge; it stops when this page is closed or loses its connection.</p>
   </section>
 </main>
 <script src="/assets/auth.js"></script>
-<script src="/assets/ultrasound_view.js"></script>
 <script>
 const API = '/api/v1/robotics/navigation';
 const form = document.getElementById('settings');
@@ -252,7 +210,8 @@ for (const [index, tab] of tabs.entries()) {
   });
 }
 const controllerFields = {
-  angular_kp: ['Angular gain', 0.000001], linear_kp: ['Linear gain', 0.000001],
+  angular_kp: ['Angular P gain', 0.000001], linear_kp: ['Linear P gain', 0.000001],
+  angular_kd: ['Angular D gain', 0], linear_kd: ['Linear D gain', 0],
   angle_tolerance: ['Angle tolerance (rad)', 0.000001], distance_tolerance: ['Distance tolerance (m)', 0.000001],
   target_distance: ['Tracking target distance (m)', 0],
 };
@@ -363,7 +322,7 @@ let robotBusy = false;
 function updateRobotButtons() {
   robotConnect.disabled = robotBusy || ['connecting', 'connected'].includes(robotState.connection);
   robotDisconnect.disabled = robotBusy || robotState.connection === 'disconnected';
-  robotStart.disabled = robotBusy || robotState.connection !== 'connected' || !robotState.drive_connected || robotState.running || robotState.lift_moving || robotState.head_moving || (robotState.avoidance_enabled && !robotState.avoidance_ready);
+  robotStart.disabled = robotBusy || robotState.connection !== 'connected' || !robotState.drive_connected || robotState.running || robotState.lift_moving || robotState.head_moving;
   const liftReady = !robotBusy && robotState.connection === 'connected' && robotState.lift_connected && robotState.lift_fresh && !robotState.running && !robotState.lift_moving && !robotState.head_moving;
   liftUp.disabled = liftDown.disabled = !liftReady;
   const headReady = !robotBusy && robotState.connection === 'connected' && robotState.head_connected && robotState.head_fresh && !robotState.running && !robotState.lift_moving && !robotState.head_moving;
@@ -372,7 +331,6 @@ function updateRobotButtons() {
 }
 function showRobotState(state) {
   robotState = state;
-  if (typeof renderUltrasound === 'function') renderUltrasound(state);
   const badge = document.getElementById('robot-connection');
   badge.dataset.state = state.running || state.lift_moving || state.head_moving ? 'running' : state.connection;
   badge.textContent = state.running ? 'Running' : state.lift_moving ? 'Adjusting body' : state.head_moving ? 'Adjusting head' : ({connected: 'Connected · stopped', connecting: 'Connecting', error: 'ROS unavailable', disconnected: 'Disconnected'}[state.connection] || state.connection);
@@ -400,7 +358,7 @@ function showRobotState(state) {
   updateRobotButtons();
 }
 async function robotPost(path, extraValues = {}) {
-  const values = path === '/robot/start' || path === '/robot/avoidance' || (path.startsWith('/robot/lift/') || path.startsWith('/robot/head/')) ? {generation: robotState.generation} : {};
+  const values = path === '/robot/start' || (path.startsWith('/robot/lift/') || path.startsWith('/robot/head/')) ? {generation: robotState.generation} : {};
   Object.assign(values, extraValues);
   const response = await fetch(API + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(values)});
   const result = await response.json();
@@ -422,7 +380,6 @@ async function robotAction(path, busy = true, values = {}) {
   finally { if (busy) { robotBusy = false; updateRobotButtons(); } }
 }
 robotConnect.addEventListener('click', () => robotAction('/robot/connect'));
-globalThis.configureUltrasoundAvoidance = (enabled, mapping) => robotAction('/robot/avoidance', true, {enabled, mapping});
 robotDisconnect.addEventListener('click', () => robotAction('/robot/disconnect'));
 robotStart.addEventListener('click', () => robotAction('/robot/start'));
 liftUp.addEventListener('click', () => robotAction('/robot/lift/up'));
@@ -434,7 +391,7 @@ function stopWhenLeaving() {
   robotState.running = false;
   robotState.lift_moving = false;
   robotState.head_moving = false;
-  // Not sendBeacon: it cannot carry the password header.
+  // A keepalive fetch, not a beacon: a beacon cannot carry the password header.
   fetch(API + '/robot/stop', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', keepalive: true}).catch(() => {});
 }
 window.addEventListener('pagehide', stopWhenLeaving);

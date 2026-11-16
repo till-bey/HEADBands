@@ -76,8 +76,10 @@ def test_bridge_drives_navigation_through_the_supervisor_and_releases_once() -> 
     sup.drive_manual(twist, 100.05)
     assert sup.evaluate_watchdog(100.1).linear_x == pytest.approx(0.5)
 
-    nav._twist = (-0.2, 0.0, 100.1)
-    assert nav.take_twist(100.1, 0.5, 1.0) == (0.0, 0.0, 0.0)  # never reverses; stopping releases the base once
+    nav._twist = (-0.9, 0.0, 100.1)
+    assert nav.take_twist(100.1, 0.5, 1.0) == (-0.5, 0.0, 0.0)  # backing off is clamped the same way
+    nav._twist = (0.0, 0.0, 100.12)
+    assert nav.take_twist(100.12, 0.5, 1.0) == (0.0, 0.0, 0.0)  # stopping releases the base once
     assert nav.take_twist(100.15, 0.5, 1.0) is None
 
     nav._twist = (0.1, 0.0, 100.0)
